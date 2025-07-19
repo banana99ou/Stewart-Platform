@@ -20,17 +20,17 @@ void setup() {
 
     // analogWriteFreq(500);
 
-    servo0.attach(4,  0, 2000);
-    servo1.attach(13, 0, 2000);
-    servo2.attach(16, 0, 2000);
-    servo3.attach(17, 0, 2000);
-    servo4.attach(18, 0, 2000);
-    servo5.attach(19, 0, 2000);
+    servo0.attach(4);
+    servo1.attach(13);
+    servo2.attach(16);
+    servo3.attach(17);
+    servo4.attach(18);
+    servo5.attach(19);
 
-    servo6.attach(20, 0, 2000);
-    servo7.attach(21, 0, 2000);
-    servo8.attach(22, 0, 2000);
-    servo9.attach(23, 0, 2000);
+    servo6.attach(20);
+    servo7.attach(21);
+    servo8.attach(22);
+    servo9.attach(23);
 
     Serial.println("boot");
 }
@@ -39,14 +39,18 @@ void loop() {
   // servo0.write(0);
   for (pos = 0; pos <= 180; pos += 1) { // goes from 0 degrees to 180 degrees in steps of 1 degree
     // analogWrite(4, pos);
+    servo0.write(pos);
 		servo1.write(pos);    // tell servo to go to position in variable 'pos'
 		delay(15);             // waits 15ms for the servo to reach the position
     Serial.println(pos);
 	}
+  delay(100);
 	for (pos = 180; pos >= 0; pos -= 1) { // goes from 180 degrees to 0 degrees
     // analogWrite(4, pos);
+    servo0.write(pos);
 		servo1.write(pos);    // tell servo to go to position in variable 'pos'
 		delay(15);             // waits 15ms for the servo to reach the position
     Serial.println(pos);
 	}
+  delay(100);
 }
