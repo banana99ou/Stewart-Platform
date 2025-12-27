@@ -1,3 +1,4 @@
+from msilib import datasizemask
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (needed for 3D)
@@ -23,6 +24,14 @@ def rotate_x(p, deg):
   x, y, z = p
   return np.array([x, y * c - z * s, y * s + z * c])
 
+def rotate_y(p, deg):
+  """Rotate point about Y axis (Pitch)"""
+  rad = deg * DEG2RAD
+  c = np.cos(rad)
+  s = np.sin(rad)
+  x, y, z = p
+  return np.array([x * c + z * s, y, -x * s + z * c])
+
 def translate(p, dx, dy, dz):
   """Translate point by (dx, dy, dz)"""
   return p + np.array([dx, dy, dz])
@@ -31,6 +40,61 @@ def mirror_x(p):
   """Mirror across YZ plane (negate X coordinate)"""
   x, y, z = p
   return np.array([-x, y, z])
+
+def get_servo_axis(index):
+  """
+  Return the servo rotation axis (unit vector in global coordinates) for leg index 0..5.
+  Hardware: axes lie in the XY plane and point radially outward.
+  - Servos 1 & 6 (indices 0 & 5): axis along +Y (0, 1, 0)
+  - Servos 2 & 3 (indices 1 & 2): axis is +120° yaw from +Y
+  - Servos 4 & 5 (indices 3 & 4): axis is -120° yaw from +Y
+  """
+  base_axis = np.array([0.0, 1.0, 0.0])
+  if index in (0, 5):
+    angle = 0.0
+  elif index in (1, 2):
+    angle = 120.0
+  elif index in (3, 4):
+    angle = -120.0
+  else:
+    raise ValueError(f"Invalid servo index: {index}")
+  
+  axis = rotate_z(base_axis, angle)
+  norm = np.linalg.norm(axis)
+  if norm < 1e-9:
+    # Fallback to global Z to avoid division by zero, though this shouldn't happen
+    return np.array([0.0, 0.0, 1.0])
+  return axis / norm
+
+def build_servo_frame(axis):
+  """
+  Build an orthonormal basis (rotation matrix) for a servo's local frame.
+  Local frame is defined so that:
+    - local Z axis aligns with the given 'axis' (servo rotation axis)
+    - local X,Y span the plane perpendicular to axis
+  Returns a 3x3 matrix R such that:
+    v_local = R @ v_global
+    v_global = R.T @ v_local
+  """
+  e_z = axis
+  # Choose a reference vector not parallel to e_z
+  ref = np.array([0.0, 0.0, 1.0])
+  if abs(np.dot(ref, e_z)) > 0.99:
+    ref = np.array([1.0, 0.0, 0.0])
+  
+  e_x = np.cross(ref, e_z)
+  e_x_norm = np.linalg.norm(e_x)
+  if e_x_norm < 1e-9:
+    # Degenerate, fall back to some default
+    e_x = np.array([1.0, 0.0, 0.0])
+    e_x_norm = 1.0
+  e_x /= e_x_norm
+  
+  e_y = np.cross(e_z, e_x)
+  # e_y should already be unit length if e_x and e_z are orthonormal
+  
+  R = np.vstack((e_x, e_y, e_z))
+  return R
 
 # Base geometry for servo 1
 B1 = np.array([-50.0, 100.0, 10.0])
@@ -136,11 +200,12 @@ def compute_horn_position_ik(B, H0, servo_angle_deg):
   h_rotated = rotate_z(h, servo_angle_deg)
   return B + h_rotated
 
-def transform_upper_anchors(upper_original, dz=0.0, roll_deg=0.0, yaw_deg=0.0):
+def transform_upper_anchors(upper_original, dz=0.0, roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0, dx=0.0, dy=0.0):
   """
   Transform upper anchors by translation and rotation.
   Rotations are applied about the center of the upper plate.
-  Order: Translate to origin, Roll (X-axis), Yaw (Z-axis), translate back, then Z translation.
+  Order: Translate to origin, Roll (X-axis), Pitch (Y-axis), Yaw (Z-axis),
+  translate back, then global translation (dx, dy, dz).
   """
   upper = upper_original.copy()
   
@@ -154,6 +219,10 @@ def transform_upper_anchors(upper_original, dz=0.0, roll_deg=0.0, yaw_deg=0.0):
   if roll_deg != 0.0:
     upper_centered = np.array([rotate_x(p, roll_deg) for p in upper_centered])
   
+  # Apply Pitch (rotation about Y axis)
+  if pitch_deg != 0.0:
+    upper_centered = np.array([rotate_y(p, pitch_deg) for p in upper_centered])
+  
   # Apply Yaw (rotation about Z axis)
   if yaw_deg != 0.0:
     upper_centered = np.array([rotate_z(p, yaw_deg) for p in upper_centered])
@@ -161,22 +230,28 @@ def transform_upper_anchors(upper_original, dz=0.0, roll_deg=0.0, yaw_deg=0.0):
   # Translate back to original center
   upper = upper_centered + center
   
-  # Apply translation in Z
-  if dz != 0.0:
-    upper = np.array([translate(p, 0.0, 0.0, dz) for p in upper])
+  # Apply global translation
+  if abs(dx) > 1e-9 or abs(dy) > 1e-9 or abs(dz) > 1e-9:
+    upper = np.array([translate(p, dx, dy, dz) for p in upper])
   
   return upper
 
-def format_config_title(dz=0.0, roll_deg=0.0, yaw_deg=0.0):
+def format_config_title(dz=0.0, roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0, dx=0.0, dy=0.0):
   """
   Generate a human-readable title from transform parameters.
-  Ensures labels always match dz / roll / yaw values used.
+  Ensures labels always match dz / roll / yaw / dx / dy values used.
   """
   parts = []
+  if abs(dx) > 1e-6:
+    parts.append(f"X {dx:+.1f}mm")
+  if abs(dy) > 1e-6:
+    parts.append(f"Y {dy:+.1f}mm")
   if abs(dz) > 1e-6:
     parts.append(f"Z {dz:+.1f}mm")
   if abs(roll_deg) > 1e-6:
     parts.append(f"Roll {roll_deg:+.1f}°")
+  if abs(pitch_deg) > 1e-6:
+    parts.append(f"Pitch {pitch_deg:+.1f}°")
   if abs(yaw_deg) > 1e-6:
     parts.append(f"Yaw {yaw_deg:+.1f}°")
   if not parts:
@@ -197,7 +272,24 @@ def compute_all_servo_angles(bottom, horn_0deg, upper_target, L, min_deg=-90, ma
   success_flags = []
   
   for i in range(6):
-    theta1, theta2, ok = solve_servo_angle_z_axis(bottom[i], horn_0deg[i], upper_target[i], L)
+    # Build servo-local frame where the real servo axis is the local Z axis.
+    axis = get_servo_axis(i)
+    R = build_servo_frame(axis)  # global -> local
+    
+    B_global = bottom[i]
+    H0_global = horn_0deg[i]
+    U_global = upper_target[i]
+    
+    # Express horn and target vectors in the servo-local frame with B at origin.
+    h_local = R @ (H0_global - B_global)
+    u_local = R @ (U_global - B_global)
+    
+    B_local = np.zeros(3)
+    H0_local = h_local
+    U_local = u_local
+    
+    # Reuse existing Z-axis IK solver in the servo-local frame.
+    theta1, theta2, ok = solve_servo_angle_z_axis(B_local, H0_local, U_local, L)
     if not ok:
       angles.append(None)
       horn_ik[i] = horn_0deg[i]  # Fallback to 0° position
@@ -211,7 +303,10 @@ def compute_all_servo_angles(bottom, horn_0deg, upper_target, L, min_deg=-90, ma
       success_flags.append(False)
     else:
       angles.append(theta)
-      horn_ik[i] = compute_horn_position_ik(bottom[i], horn_0deg[i], theta)
+      # Rotate horn in local frame about local Z, then map back to global.
+      h_rot_local = rotate_z(h_local, theta)
+      horn_global = B_global + R.T @ h_rot_local
+      horn_ik[i] = horn_global
       success_flags.append(True)
   
   return angles, horn_ik, success_flags
@@ -262,6 +357,9 @@ def plot_single_platform(ax, bottom, horn, upper, title, show_angles=None):
   ax.set_zlabel("Z")
   ax.set_title(title)
   ax.legend(fontsize=6)
+  
+  # Set top-down view (looking along -Z onto XY plane)
+  ax.view_init(elev=90.0, azim=-90.0)
 
 def plot_platform(bottom, horn, upper):
   """Original single plot function (for backward compatibility)"""
@@ -276,12 +374,12 @@ def plot_multiple_configurations(bottom, horn_0deg, upper_original):
   
   # Define 6 test configurations
   configs = [
-    {"dz": 10.0, "roll": 0.0, "yaw": 0.0},
-    {"dz": -10.0, "roll": 0.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": 10.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": -10.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": 0.0, "yaw": 10.0},
-    {"dz": 0.0, "roll": 0.0, "yaw": -10.0},
+    {"dz": 10.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+    {"dz": -10.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": 10.0, "pitch": 0.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": -10.0, "pitch": 0.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 10.0},
+    {"dz": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": -10.0},
   ]
   
   for idx, config in enumerate(configs):
@@ -292,6 +390,7 @@ def plot_multiple_configurations(bottom, horn_0deg, upper_original):
       upper_original,
       dz=config["dz"],
       roll_deg=config["roll"],
+      pitch_deg=config.get("pitch", 0.0),
       yaw_deg=config["yaw"]
     )
     
@@ -303,7 +402,7 @@ def plot_multiple_configurations(bottom, horn_0deg, upper_original):
     
     # Format title with angles
     base_title = format_config_title(
-      dz=config["dz"], roll_deg=config["roll"], yaw_deg=config["yaw"]
+      dz=config["dz"], roll_deg=config["roll"], pitch_deg=config.get("pitch", 0.0), yaw_deg=config["yaw"]
     )
     angle_str = ", ".join([f"{a:.1f}°" if a is not None else "FAIL" for a in angles])
     title = f"{base_title}\n[{angle_str}]"
@@ -325,26 +424,27 @@ if __name__ == "__main__":
   
   # Define 6 test configurations
   test_configs = [
-    {"dz": 0.0, "roll": 0.0, "yaw": 0.0},
-    {"dz": 10.0, "roll": 0.0, "yaw": 0.0},
-    {"dz": -10.0, "roll": 0.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": 10.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": -10.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": 0.0, "yaw": 10.0},
-    {"dz": 0.0, "roll": 0.0, "yaw": -10.0},
+    {"dz": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+    {"dz": 10.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+    {"dz": -10.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": 10.0, "pitch": 0.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": -10.0, "pitch": 0.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 10.0},
+    {"dz": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": -10.0},
   ]
   
   # Solve IK for all test cases
   print("=== Inverse Kinematics Test Results ===\n")
   for config in test_configs:
     title = format_config_title(
-      dz=config["dz"], roll_deg=config["roll"], yaw_deg=config["yaw"]
+      dz=config["dz"], roll_deg=config["roll"], pitch_deg=config.get("pitch", 0.0), yaw_deg=config["yaw"]
     )
     print(f"--- {title} ---")
     upper_transformed = transform_upper_anchors(
       upper,
       dz=config["dz"],
       roll_deg=config["roll"],
+      pitch_deg=config.get("pitch", 0.0),
       yaw_deg=config["yaw"]
     )
     angles, horn_ik, success = compute_all_servo_angles(bottom, horn, upper_transformed, LINK_LENGTH)
@@ -358,6 +458,95 @@ if __name__ == "__main__":
       else:
         print(f"  {i+1}   |     N/A     | FAIL")
     print()
+  
+  # Generic 1D sweep helper to probe reachability vs. servo range / geometry
+  def sweep_param(param_name, values, unit, bottom, horn_0deg, upper_original):
+    print(f"--- {param_name} sweep ---")
+    print(f"{param_name}({unit}) | pattern (legs 1-6, 1=OK,0=FAIL) | all_ok")
+    for v in values:
+      if param_name == "dz":
+        upper_t = transform_upper_anchors(
+          upper_original,
+          dz=v,
+          roll_deg=0.0,
+          pitch_deg=0.0,
+          yaw_deg=0.0,
+          dx=0.0,
+          dy=0.0,
+        )
+      elif param_name == "dx":
+        upper_t = transform_upper_anchors(
+          upper_original,
+          dz=0.0,
+          roll_deg=0.0,
+          pitch_deg=0.0,
+          yaw_deg=0.0,
+          dx=v,
+          dy=0.0,
+        )
+      elif param_name == "dy":
+        upper_t = transform_upper_anchors(
+          upper_original,
+          dz=0.0,
+          roll_deg=0.0,
+          pitch_deg=0.0,
+          yaw_deg=0.0,
+          dx=0.0,
+          dy=v,
+        )
+      elif param_name == "roll":
+        upper_t = transform_upper_anchors(
+          upper_original,
+          dz=0.0,
+          roll_deg=v,
+          pitch_deg=0.0,
+          yaw_deg=0.0,
+          dx=0.0,
+          dy=0.0,
+        )
+      elif param_name == "pitch":
+        upper_t = transform_upper_anchors(
+          upper_original,
+          dz=0.0,
+          roll_deg=0.0,
+          pitch_deg=v,
+          yaw_deg=0.0,
+          dx=0.0,
+          dy=0.0,
+        )
+      elif param_name == "yaw":
+        upper_t = transform_upper_anchors(
+          upper_original,
+          dz=0.0,
+          roll_deg=0.0,
+          pitch_deg=0.0,
+          yaw_deg=v,
+          dx=0.0,
+          dy=0.0,
+        )
+      else:
+        raise ValueError(f"Unknown parameter name for sweep: {param_name}")
+      
+      _, _, success = compute_all_servo_angles(bottom, horn_0deg, upper_t, LINK_LENGTH)
+      pattern = "".join("1" if s else "0" for s in success)
+      all_ok = "1" if all(success) else "0"
+      print(f"{v:+7.2f} | {pattern} | {all_ok}")
+    print()
+  
+  # Sweeps for all axes / DOFs
+  dz_values = np.linspace(-90.0, 90.0, 181)     # mm
+  dx_values = np.linspace(-90.0, 90.0, 181)     # mm
+  dy_values = np.linspace(-90.0, 90.0, 181)     # mm
+  roll_values = np.linspace(-90.0, 90.0, 181)    # degrees
+  pitch_values = np.linspace(-90.0, 90.0, 181)
+  yaw_values = np.linspace(-90.0, 90.0, 181)     # degrees
+  
+  sweep_param("dz", dz_values, "mm", bottom, horn, upper)
+  sweep_param("dx", dx_values, "mm", bottom, horn, upper)
+  sweep_param("dy", dy_values, "mm", bottom, horn, upper)
+  sweep_param("roll", roll_values, "deg", bottom, horn, upper)
+  sweep_param("pitch", pitch_values, "deg", bottom, horn, upper)
+  sweep_param("yaw", yaw_values, "deg", bottom, horn, upper)
   
   # Plot 6 different configurations with IK
   plot_multiple_configurations(bottom, horn, upper)
