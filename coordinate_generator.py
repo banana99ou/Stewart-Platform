@@ -4,6 +4,9 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (needed for 3D)
 
 DEG2RAD = np.pi / 180.0
 
+# Geometry constants
+LINK_LENGTH = 162.21128  # mm (ball link center to center)
+
 def rotate_z(p, deg):
   """Rotate point about Z axis (Yaw)"""
   rad = deg * DEG2RAD
@@ -29,7 +32,7 @@ def mirror_x(p):
   x, y, z = p
   return np.array([-x, y, z])
 
-# Base geometry for servo 1 (same as Arduino code)
+# Base geometry for servo 1
 B1 = np.array([-50.0, 100.0, 10.0])
 H1 = np.array([-85.0, 108.0 + 3.3 / 2.0, 10.0])
 U1 = np.array([-7.5, 108.0 + 3.3 / 2.0, 152.5])
@@ -71,6 +74,68 @@ def generate_coordinates():
 
   return bottom, horn, upper
 
+def solve_servo_angle_z_axis(B, H0, U_target, L):
+  """
+  Solve inverse kinematics for one leg.
+  
+  B: (3,) bottom anchor (servo axle center)
+  H0: (3,) horn ball position at 0 deg
+  U_target: (3,) desired upper anchor position
+  L: linkage length
+  
+  Returns: (theta1_deg, theta2_deg, success)
+  """
+  h = H0 - B  # Horn vector at 0°
+  s = U_target - B  # Vector from bottom to target upper anchor
+
+  # Coefficients for: a*cos(θ) + b*sin(θ) = γ'
+  a = s[0]*h[0] + s[1]*h[1]
+  b = -s[0]*h[1] + s[1]*h[0]
+  gamma = 0.5 * (np.dot(s, s) + np.dot(h, h) - L*L)
+  gamma_p = gamma - s[2]*h[2]  # Account for Z component if horn has Z offset
+
+  r = np.hypot(a, b)
+  if r < 1e-9:
+    return 0.0, 0.0, False
+
+  x = gamma_p / r
+  if x < -1.0 or x > 1.0:
+    return 0.0, 0.0, False  # No solution (linkage too short/long)
+
+  phi = np.arctan2(b, a)
+  d = np.arccos(x)
+
+  theta1_deg = np.degrees(phi + d)
+  theta2_deg = np.degrees(phi - d)
+  return theta1_deg, theta2_deg, True
+
+def pick_solution(theta1, theta2, min_deg=-90, max_deg=90, prefer_deg=0.0):
+  """
+  Pick a solution within servo limits.
+  If both valid, choose closest to prefer_deg.
+  Returns: selected angle in degrees, or None if no valid solution
+  """
+  candidates = []
+  for t in (theta1, theta2):
+    # Normalize to [-180, 180] for comparison
+    tn = (t + 180.0) % 360.0 - 180.0
+    if min_deg <= tn <= max_deg:
+      candidates.append(tn)
+  
+  if not candidates:
+    return None
+  
+  return min(candidates, key=lambda t: abs(t - prefer_deg))
+
+def compute_horn_position_ik(B, H0, servo_angle_deg):
+  """
+  Compute horn ball link position given servo angle.
+  Rotates horn vector by servo_angle_deg about Z axis.
+  """
+  h = H0 - B  # Horn vector at 0°
+  h_rotated = rotate_z(h, servo_angle_deg)
+  return B + h_rotated
+
 def transform_upper_anchors(upper_original, dz=0.0, roll_deg=0.0, yaw_deg=0.0):
   """
   Transform upper anchors by translation and rotation.
@@ -102,9 +167,58 @@ def transform_upper_anchors(upper_original, dz=0.0, roll_deg=0.0, yaw_deg=0.0):
   
   return upper
 
-def plot_single_platform(ax, bottom, horn, upper, title):
-  """Plot a single platform configuration in a subplot"""
+def format_config_title(dz=0.0, roll_deg=0.0, yaw_deg=0.0):
+  """
+  Generate a human-readable title from transform parameters.
+  Ensures labels always match dz / roll / yaw values used.
+  """
+  parts = []
+  if abs(dz) > 1e-6:
+    parts.append(f"Z {dz:+.1f}mm")
+  if abs(roll_deg) > 1e-6:
+    parts.append(f"Roll {roll_deg:+.1f}°")
+  if abs(yaw_deg) > 1e-6:
+    parts.append(f"Yaw {yaw_deg:+.1f}°")
+  if not parts:
+    return "Original Position"
+  return ", ".join(parts)
 
+def compute_all_servo_angles(bottom, horn_0deg, upper_target, L, min_deg=-90, max_deg=90):
+  """
+  Compute servo angles for all 6 legs using inverse kinematics.
+  
+  Returns:
+    angles: list of 6 angles (degrees), None if IK failed
+    horn_ik: (6, 3) array of computed horn positions
+    success: list of 6 booleans indicating IK success
+  """
+  angles = []
+  horn_ik = np.zeros((6, 3))
+  success_flags = []
+  
+  for i in range(6):
+    theta1, theta2, ok = solve_servo_angle_z_axis(bottom[i], horn_0deg[i], upper_target[i], L)
+    if not ok:
+      angles.append(None)
+      horn_ik[i] = horn_0deg[i]  # Fallback to 0° position
+      success_flags.append(False)
+      continue
+    
+    theta = pick_solution(theta1, theta2, min_deg, max_deg, prefer_deg=0.0)
+    if theta is None:
+      angles.append(None)
+      horn_ik[i] = horn_0deg[i]
+      success_flags.append(False)
+    else:
+      angles.append(theta)
+      horn_ik[i] = compute_horn_position_ik(bottom[i], horn_0deg[i], theta)
+      success_flags.append(True)
+  
+  return angles, horn_ik, success_flags
+
+def plot_single_platform(ax, bottom, horn, upper, title, show_angles=None):
+  """Plot a single platform configuration in a subplot"""
+  
   # Bottom anchors
   ax.scatter(bottom[:, 0], bottom[:, 1], bottom[:, 2], c='b', s=30, label='BottomAnchor')
 
@@ -118,12 +232,17 @@ def plot_single_platform(ax, bottom, horn, upper, title):
     zs = [horn[i, 2], upper[i, 2]]
     ax.plot(xs, ys, zs, 'k-', linewidth=1.5, label='Linkage' if i == 0 else '')
 
-  # Horns (bottom -> horn@0deg)
+  # Horns (bottom -> horn position)
   for i in range(6):
     xs = [bottom[i, 0], horn[i, 0]]
     ys = [bottom[i, 1], horn[i, 1]]
     zs = [bottom[i, 2], horn[i, 2]]
     ax.plot(xs, ys, zs, 'g--', linewidth=1, alpha=0.5)
+    
+    # Show servo angle if provided
+    if show_angles is not None and show_angles[i] is not None:
+      ax.text(bottom[i, 0], bottom[i, 1], bottom[i, 2] - 20,
+              f"θ={show_angles[i]:.1f}°", fontsize=6, color='purple')
 
   # Make aspect roughly equal
   all_pts = np.vstack([bottom, upper, horn])
@@ -151,29 +270,46 @@ def plot_platform(bottom, horn, upper):
   plot_single_platform(ax, bottom, horn, upper, "Stewart Platform Servo & Link Geometry")
   plt.show()
 
-def plot_multiple_configurations(bottom, horn, upper_original):
-  """Plot 6 different platform configurations in a 2x3 grid"""
+def plot_multiple_configurations(bottom, horn_0deg, upper_original):
+  """Plot 6 different platform configurations in a 2x3 grid with IK"""
   fig = plt.figure(figsize=(18, 12))
   
   # Define 6 test configurations
   configs = [
-    {"title": "Z +50mm", "dz": 50.0, "roll": 0.0, "yaw": 0.0},
-    {"title": "Z -50mm", "dz": -50.0, "roll": 0.0, "yaw": 0.0},
-    {"title": "Roll +30°", "dz": 0.0, "roll": 30.0, "yaw": 0.0},
-    {"title": "Roll -30°", "dz": 0.0, "roll": -30.0, "yaw": 0.0},
-    {"title": "Yaw +30°", "dz": 0.0, "roll": 0.0, "yaw": 30.0},
-    {"title": "Yaw -30°", "dz": 0.0, "roll": 0.0, "yaw": -30.0},
+    {"dz": 10.0, "roll": 0.0, "yaw": 0.0},
+    {"dz": -10.0, "roll": 0.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": 10.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": -10.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": 0.0, "yaw": 10.0},
+    {"dz": 0.0, "roll": 0.0, "yaw": -10.0},
   ]
   
   for idx, config in enumerate(configs):
     ax = fig.add_subplot(2, 3, idx + 1, projection='3d')
+    
+    # Transform upper anchors
     upper_transformed = transform_upper_anchors(
       upper_original,
       dz=config["dz"],
       roll_deg=config["roll"],
       yaw_deg=config["yaw"]
     )
-    plot_single_platform(ax, bottom, horn, upper_transformed, config["title"])
+    
+    # Compute IK to get actual horn positions
+    angles, horn_ik, success = compute_all_servo_angles(
+      bottom, horn_0deg, upper_transformed, LINK_LENGTH,
+      min_deg=-90, max_deg=90
+    )
+    
+    # Format title with angles
+    base_title = format_config_title(
+      dz=config["dz"], roll_deg=config["roll"], yaw_deg=config["yaw"]
+    )
+    angle_str = ", ".join([f"{a:.1f}°" if a is not None else "FAIL" for a in angles])
+    title = f"{base_title}\n[{angle_str}]"
+    
+    # Plot with IK-calculated horn positions
+    plot_single_platform(ax, bottom, horn_ik, upper_transformed, title, show_angles=angles)
   
   plt.tight_layout()
   plt.show()
@@ -187,5 +323,42 @@ if __name__ == "__main__":
     print(f"  Upper:  {upper[i]}")
     print()
   
-  # Plot 6 different configurations
+  # Define 6 test configurations
+  test_configs = [
+    {"dz": 0.0, "roll": 0.0, "yaw": 0.0},
+    {"dz": 10.0, "roll": 0.0, "yaw": 0.0},
+    {"dz": -10.0, "roll": 0.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": 10.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": -10.0, "yaw": 0.0},
+    {"dz": 0.0, "roll": 0.0, "yaw": 10.0},
+    {"dz": 0.0, "roll": 0.0, "yaw": -10.0},
+  ]
+  
+  # Solve IK for all test cases
+  print("=== Inverse Kinematics Test Results ===\n")
+  for config in test_configs:
+    title = format_config_title(
+      dz=config["dz"], roll_deg=config["roll"], yaw_deg=config["yaw"]
+    )
+    print(f"--- {title} ---")
+    upper_transformed = transform_upper_anchors(
+      upper,
+      dz=config["dz"],
+      roll_deg=config["roll"],
+      yaw_deg=config["yaw"]
+    )
+    angles, horn_ik, success = compute_all_servo_angles(bottom, horn, upper_transformed, LINK_LENGTH)
+    
+    # Print results in a table format
+    print("Servo | Angle (deg) | Status")
+    print("------|-------------|--------")
+    for i in range(6):
+      if success[i]:
+        print(f"  {i+1}   |   {angles[i]:7.2f}   | OK")
+      else:
+        print(f"  {i+1}   |     N/A     | FAIL")
+    print()
+  
+  # Plot 6 different configurations with IK
   plot_multiple_configurations(bottom, horn, upper)
+
