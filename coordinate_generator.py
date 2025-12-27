@@ -359,7 +359,7 @@ def plot_single_platform(ax, bottom, horn, upper, title, show_angles=None):
   ax.legend(fontsize=6)
   
   # Set top-down view (looking along -Z onto XY plane)
-  ax.view_init(elev=90.0, azim=-90.0)
+  ax.view_init(elev=45.0, azim=-45.0)
 
 def plot_platform(bottom, horn, upper):
   """Original single plot function (for backward compatibility)"""
@@ -368,49 +368,84 @@ def plot_platform(bottom, horn, upper):
   plot_single_platform(ax, bottom, horn, upper, "Stewart Platform Servo & Link Geometry")
   plt.show()
 
-def plot_multiple_configurations(bottom, horn_0deg, upper_original):
-  """Plot 6 different platform configurations in a 2x3 grid with IK"""
-  fig = plt.figure(figsize=(18, 12))
+def simulate_circular_motion(bottom, horn_0deg, upper_original,
+                             radius_mm=50.0, dz=0.0, roll_deg=0.0,
+                             pitch_deg=0.0, yaw_deg=0.0, n_steps=180,
+                             min_deg=-90.0, max_deg=90.0):
+  """
+  Sample a horizontal circular trajectory of the upper plate center in XY.
+  Center starts at current upper plate center and is offset by (dx, dy) on
+  a circle of given radius in the XY plane.
   
-  # Define 6 test configurations
-  configs = [
-    {"dz": 10.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
-    {"dz": -10.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": 10.0, "pitch": 0.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": -10.0, "pitch": 0.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 10.0},
-    {"dz": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": -10.0},
-  ]
-  
-  for idx, config in enumerate(configs):
-    ax = fig.add_subplot(2, 3, idx + 1, projection='3d')
+  Returns a list of samples:
+    (t_deg, dx, dy, angles, success_flags, horn_ik, upper_transformed)
+  """
+  thetas = np.linspace(0.0, 360.0, n_steps, endpoint=False)
+  samples = []
+  for t in thetas:
+    rad = t * DEG2RAD
+    dx = radius_mm * np.cos(rad)
+    dy = radius_mm * np.sin(rad)
     
-    # Transform upper anchors
-    upper_transformed = transform_upper_anchors(
+    upper_t = transform_upper_anchors(
       upper_original,
-      dz=config["dz"],
-      roll_deg=config["roll"],
-      pitch_deg=config.get("pitch", 0.0),
-      yaw_deg=config["yaw"]
+      dz=dz,
+      roll_deg=roll_deg,
+      pitch_deg=pitch_deg,
+      yaw_deg=yaw_deg,
+      dx=dx,
+      dy=dy,
     )
     
-    # Compute IK to get actual horn positions
     angles, horn_ik, success = compute_all_servo_angles(
-      bottom, horn_0deg, upper_transformed, LINK_LENGTH,
-      min_deg=-90, max_deg=90
+      bottom, horn_0deg, upper_t, LINK_LENGTH,
+      min_deg=min_deg, max_deg=max_deg
     )
-    
-    # Format title with angles
-    base_title = format_config_title(
-      dz=config["dz"], roll_deg=config["roll"], pitch_deg=config.get("pitch", 0.0), yaw_deg=config["yaw"]
-    )
-    angle_str = ", ".join([f"{a:.1f}°" if a is not None else "FAIL" for a in angles])
-    title = f"{base_title}\n[{angle_str}]"
-    
-    # Plot with IK-calculated horn positions
-    plot_single_platform(ax, bottom, horn_ik, upper_transformed, title, show_angles=angles)
+    samples.append((t, dx, dy, angles, success, horn_ik, upper_t))
   
-  plt.tight_layout()
+  return samples
+
+def animate_circular_motion(bottom, horn_0deg, upper_original,
+                            radius_mm=50.0, dz=0.0, roll_deg=0.0,
+                            pitch_deg=0.0, yaw_deg=0.0, n_steps=180,
+                            min_deg=-90.0, max_deg=90.0, pause_s=0.05):
+  """
+  Animate the platform following a horizontal circular motion in XY.
+  Close the matplotlib window or interrupt the script to stop the animation.
+  """
+  samples = simulate_circular_motion(
+    bottom, horn_0deg, upper_original,
+    radius_mm=radius_mm,
+    dz=dz,
+    roll_deg=roll_deg,
+    pitch_deg=pitch_deg,
+    yaw_deg=yaw_deg,
+    n_steps=n_steps,
+    min_deg=min_deg,
+    max_deg=max_deg,
+  )
+  
+  fig = plt.figure(figsize=(8, 8))
+  ax = fig.add_subplot(111, projection='3d')
+  
+  # Use first valid configuration to set consistent axis limits
+  for (_, _, _, _, success, horn_ik, upper_t) in samples:
+    if all(success):
+      plot_single_platform(ax, bottom, horn_ik, upper_t,
+                           "Stewart Platform Circular Motion (initial frame)")
+      break
+  plt.pause(pause_s)
+  
+  for t_deg, dx, dy, angles, success, horn_ik, upper_t in samples:
+    ax.cla()
+    title = (f"Circular XY motion r={radius_mm:.1f}mm, "
+             f"t={t_deg:6.1f}°, dx={dx:+6.1f}, dy={dy:+6.1f}")
+    # Mark frames where any leg fails IK
+    if not all(success):
+      title += "  [IK FAIL]"
+    plot_single_platform(ax, bottom, horn_ik, upper_t, title, show_angles=angles)
+    plt.pause(pause_s)
+  
   plt.show()
 
 if __name__ == "__main__":
@@ -422,132 +457,21 @@ if __name__ == "__main__":
     print(f"  Upper:  {upper[i]}")
     print()
   
-  # Define 6 test configurations
-  test_configs = [
-    {"dz": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
-    {"dz": 10.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
-    {"dz": -10.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": 10.0, "pitch": 0.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": -10.0, "pitch": 0.0, "yaw": 0.0},
-    {"dz": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 10.0},
-    {"dz": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": -10.0},
-  ]
-  
-  # Solve IK for all test cases
-  print("=== Inverse Kinematics Test Results ===\n")
-  for config in test_configs:
-    title = format_config_title(
-      dz=config["dz"], roll_deg=config["roll"], pitch_deg=config.get("pitch", 0.0), yaw_deg=config["yaw"]
-    )
-    print(f"--- {title} ---")
-    upper_transformed = transform_upper_anchors(
-      upper,
-      dz=config["dz"],
-      roll_deg=config["roll"],
-      pitch_deg=config.get("pitch", 0.0),
-      yaw_deg=config["yaw"]
-    )
-    angles, horn_ik, success = compute_all_servo_angles(bottom, horn, upper_transformed, LINK_LENGTH)
-    
-    # Print results in a table format
-    print("Servo | Angle (deg) | Status")
-    print("------|-------------|--------")
-    for i in range(6):
-      if success[i]:
-        print(f"  {i+1}   |   {angles[i]:7.2f}   | OK")
-      else:
-        print(f"  {i+1}   |     N/A     | FAIL")
-    print()
-  
-  # Generic 1D sweep helper to probe reachability vs. servo range / geometry
-  def sweep_param(param_name, values, unit, bottom, horn_0deg, upper_original):
-    print(f"--- {param_name} sweep ---")
-    print(f"{param_name}({unit}) | pattern (legs 1-6, 1=OK,0=FAIL) | all_ok")
-    for v in values:
-      if param_name == "dz":
-        upper_t = transform_upper_anchors(
-          upper_original,
-          dz=v,
-          roll_deg=0.0,
-          pitch_deg=0.0,
-          yaw_deg=0.0,
-          dx=0.0,
-          dy=0.0,
-        )
-      elif param_name == "dx":
-        upper_t = transform_upper_anchors(
-          upper_original,
-          dz=0.0,
-          roll_deg=0.0,
-          pitch_deg=0.0,
-          yaw_deg=0.0,
-          dx=v,
-          dy=0.0,
-        )
-      elif param_name == "dy":
-        upper_t = transform_upper_anchors(
-          upper_original,
-          dz=0.0,
-          roll_deg=0.0,
-          pitch_deg=0.0,
-          yaw_deg=0.0,
-          dx=0.0,
-          dy=v,
-        )
-      elif param_name == "roll":
-        upper_t = transform_upper_anchors(
-          upper_original,
-          dz=0.0,
-          roll_deg=v,
-          pitch_deg=0.0,
-          yaw_deg=0.0,
-          dx=0.0,
-          dy=0.0,
-        )
-      elif param_name == "pitch":
-        upper_t = transform_upper_anchors(
-          upper_original,
-          dz=0.0,
-          roll_deg=0.0,
-          pitch_deg=v,
-          yaw_deg=0.0,
-          dx=0.0,
-          dy=0.0,
-        )
-      elif param_name == "yaw":
-        upper_t = transform_upper_anchors(
-          upper_original,
-          dz=0.0,
-          roll_deg=0.0,
-          pitch_deg=0.0,
-          yaw_deg=v,
-          dx=0.0,
-          dy=0.0,
-        )
-      else:
-        raise ValueError(f"Unknown parameter name for sweep: {param_name}")
-      
-      _, _, success = compute_all_servo_angles(bottom, horn_0deg, upper_t, LINK_LENGTH)
-      pattern = "".join("1" if s else "0" for s in success)
-      all_ok = "1" if all(success) else "0"
-      print(f"{v:+7.2f} | {pattern} | {all_ok}")
-    print()
-  
-  # Sweeps for all axes / DOFs
-  dz_values = np.linspace(-90.0, 90.0, 181)     # mm
-  dx_values = np.linspace(-90.0, 90.0, 181)     # mm
-  dy_values = np.linspace(-90.0, 90.0, 181)     # mm
-  roll_values = np.linspace(-90.0, 90.0, 181)    # degrees
-  pitch_values = np.linspace(-90.0, 90.0, 181)
-  yaw_values = np.linspace(-90.0, 90.0, 181)     # degrees
-  
-  sweep_param("dz", dz_values, "mm", bottom, horn, upper)
-  sweep_param("dx", dx_values, "mm", bottom, horn, upper)
-  sweep_param("dy", dy_values, "mm", bottom, horn, upper)
-  sweep_param("roll", roll_values, "deg", bottom, horn, upper)
-  sweep_param("pitch", pitch_values, "deg", bottom, horn, upper)
-  sweep_param("yaw", yaw_values, "deg", bottom, horn, upper)
-  
-  # Plot 6 different configurations with IK
-  plot_multiple_configurations(bottom, horn, upper)
+  # Animate a circular XY path within actuation range
+  print("=== Circular XY Motion Animation ===")
+  print("Radius = 50 mm, dz = 0, roll = 0, pitch = 0, yaw = 0\n")
+  animate_circular_motion(
+    bottom,
+    horn,
+    upper,
+    radius_mm=50.0,
+    dz=0.0,
+    roll_deg=0.0,
+    pitch_deg=0.0,
+    yaw_deg=0.0,
+    n_steps=180,
+    min_deg=-90.0,
+    max_deg=90.0,
+    pause_s=0.05,
+  )
 
