@@ -1,4 +1,6 @@
-### origin @ top of bottom plate.
+In left handed cartesian coordinate
+X+ is right y+ is back/away z+ is up
+origin @ top of bottom plate.
 
 for Servo1:
 
@@ -17,3 +19,19 @@ servo 3 5 is 120 degree rotation about Z axis of servo1. and servo 2 4 6 is 120 
 origin is at the center of stewart platform. and is placed on top of bottom plate.
 servos are connected to bottom plate and numberd from top left to counter clockwise.
 servos connects to linkages via ball link. and ball links and linkages connects Upper plate.
+
+
+## Actuation range (from IK sweeps, assuming ±90° servo limits)
+
+Single-DOF sweeps with the other DOFs held at 0 give the following approximate
+reachable ranges where all 6 legs have a valid IK solution within ±90°:
+
+- translation X (`dx`): about **−78 mm to +78 mm**
+- translation Y (`dy`): about **−82 mm to +82 mm**
+- translation Z (`dz`): about **−22 mm to +49 mm**
+- roll about X (`roll`): about **−11° to +23°**
+- pitch about Y (`pitch`): about **−13° to +13°**
+- yaw about Z (`yaw`): about **−42° to +42°**
+
+These are *per-axis* ranges; simultaneous motions in multiple DOFs will have a
+smaller feasible region due to intersection of constraints.
