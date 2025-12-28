@@ -320,6 +320,17 @@ def plot_single_platform(ax, bottom, horn, upper, title, show_angles=None):
   # Upper anchors
   ax.scatter(upper[:, 0], upper[:, 1], upper[:, 2], c='r', s=30, label='UpperAnchor')
 
+  # Upper plate polygon (projected through the 6 upper anchor points)
+  upper_center = np.mean(upper, axis=0)
+  # Order anchors around center by angle in XY so edges don't cross
+  angles_xy = np.arctan2(upper[:, 1] - upper_center[1],
+                         upper[:, 0] - upper_center[0])
+  order = np.argsort(angles_xy)
+  upper_ordered = upper[order]
+  upper_closed = np.vstack([upper_ordered, upper_ordered[0:1]])
+  ax.plot(upper_closed[:, 0], upper_closed[:, 1], upper_closed[:, 2],
+          'r-', linewidth=1.5, alpha=0.6, label='UpperPlate')
+
   # Link rods (horn ball link -> upper anchor)
   for i in range(6):
     xs = [horn[i, 0], upper[i, 0]]
@@ -338,6 +349,22 @@ def plot_single_platform(ax, bottom, horn, upper, title, show_angles=None):
     if show_angles is not None and show_angles[i] is not None:
       ax.text(bottom[i, 0], bottom[i, 1], bottom[i, 2] - 20,
               f"θ={show_angles[i]:.1f}°", fontsize=6, color='purple')
+
+  # Approximate upper plate normal and draw it at the plate center
+  # Use two non-collinear edges on the ordered upper polygon
+  v1 = upper_ordered[1] - upper_ordered[0]
+  v2 = upper_ordered[2] - upper_ordered[0]
+  n = np.cross(v1, v2)
+  n_norm = np.linalg.norm(n)
+  if n_norm > 1e-6:
+    n_unit = n / n_norm
+    normal_scale = 40.0  # mm, purely for visualization
+    ax.quiver(upper_center[0], upper_center[1], upper_center[2],
+              n_unit[0] * normal_scale,
+              n_unit[1] * normal_scale,
+              n_unit[2] * normal_scale,
+              color='magenta', linewidth=2, arrow_length_ratio=0.15,
+              label='Plate normal')
 
   # Make aspect roughly equal
   all_pts = np.vstack([bottom, upper, horn])
@@ -371,7 +398,9 @@ def plot_platform(bottom, horn, upper):
 def simulate_circular_motion(bottom, horn_0deg, upper_original,
                              radius_mm=50.0, dz=0.0, roll_deg=0.0,
                              pitch_deg=0.0, yaw_deg=0.0, n_steps=180,
-                             min_deg=-90.0, max_deg=90.0):
+                             min_deg=-90.0, max_deg=90.0,
+                             align_normal_to_origin=True,
+                             tilt_deg=10.0):
   """
   Sample a horizontal circular trajectory of the upper plate center in XY.
   Center starts at current upper plate center and is offset by (dx, dy) on
@@ -387,11 +416,25 @@ def simulate_circular_motion(bottom, horn_0deg, upper_original,
     dx = radius_mm * np.cos(rad)
     dy = radius_mm * np.sin(rad)
     
+    # Compute roll/pitch so that the platform normal leans radially outward
+    # in the XY plane (i.e. -normal points toward the origin), using only
+    # roll and pitch (no yaw).
+    if align_normal_to_origin and (abs(dx) > 1e-9 or abs(dy) > 1e-9):
+      # For small angles, n_xy ≈ (pitch, -roll). To align n_xy with (dx, dy),
+      # choose roll, pitch proportional to dy and dx respectively.
+      roll_step = -tilt_deg * (dy / radius_mm)
+      pitch_step = tilt_deg * (dx / radius_mm)
+      roll_cmd = roll_deg + roll_step
+      pitch_cmd = pitch_deg + pitch_step
+    else:
+      roll_cmd = roll_deg
+      pitch_cmd = pitch_deg
+    
     upper_t = transform_upper_anchors(
       upper_original,
       dz=dz,
-      roll_deg=roll_deg,
-      pitch_deg=pitch_deg,
+      roll_deg=roll_cmd,
+      pitch_deg=pitch_cmd,
       yaw_deg=yaw_deg,
       dx=dx,
       dy=dy,
@@ -408,7 +451,9 @@ def simulate_circular_motion(bottom, horn_0deg, upper_original,
 def animate_circular_motion(bottom, horn_0deg, upper_original,
                             radius_mm=50.0, dz=0.0, roll_deg=0.0,
                             pitch_deg=0.0, yaw_deg=0.0, n_steps=180,
-                            min_deg=-90.0, max_deg=90.0, pause_s=0.05):
+                            min_deg=-90.0, max_deg=90.0, pause_s=0.05,
+                            align_normal_to_origin=True,
+                            tilt_deg=10.0):
   """
   Animate the platform following a horizontal circular motion in XY.
   Close the matplotlib window or interrupt the script to stop the animation.
@@ -423,6 +468,8 @@ def animate_circular_motion(bottom, horn_0deg, upper_original,
     n_steps=n_steps,
     min_deg=min_deg,
     max_deg=max_deg,
+    align_normal_to_origin=align_normal_to_origin,
+    tilt_deg=tilt_deg,
   )
   
   fig = plt.figure(figsize=(8, 8))
@@ -473,5 +520,7 @@ if __name__ == "__main__":
     min_deg=-90.0,
     max_deg=90.0,
     pause_s=0.05,
+    align_normal_to_origin=True,
+    tilt_deg=10.0,
   )
 
