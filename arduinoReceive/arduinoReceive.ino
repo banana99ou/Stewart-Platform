@@ -23,7 +23,7 @@
 // ---------------- Debug logging ----------------
 // Set to 0 to silence all debug prints.
 #ifndef DEBUG_SERIAL
-#define DEBUG_SERIAL 0
+#define DEBUG_SERIAL 1
 #endif
 
 // Set to 1 to print every incoming byte (can be very spammy).
@@ -32,12 +32,10 @@
 #endif
 
 #if DEBUG_SERIAL
-  #define DBG_BEGIN(baud) Serial.begin(baud)
   #define DBG_PRINTLN(x)  Serial.println(x)
   #define DBG_PRINT(x)    Serial.print(x)
   #define DBG_PRINTF(...) Serial.printf(__VA_ARGS__)
 #else
-  #define DBG_BEGIN(baud) do {} while (0)
   #define DBG_PRINTLN(x)  do {} while (0)
   #define DBG_PRINT(x)    do {} while (0)
   #define DBG_PRINTF(...) do {} while (0)
@@ -71,7 +69,8 @@ static float lastFloat = 0.0f;
 static uint8_t lastFloatBytes[4] = {0, 0, 0, 0};
 static uint32_t floatsDecoded = 0;
 
-static constexpr size_t FLOAT_RING_SIZE = 32;
+// Keep a short history of decoded floats for easier debugging.
+static constexpr size_t FLOAT_RING_SIZE = 24;
 static float floatRing[FLOAT_RING_SIZE];
 static uint8_t floatRingBytes[FLOAT_RING_SIZE][4];
 static size_t floatRingHead = 0;
@@ -102,25 +101,36 @@ static String lastNBytesHex(size_t n) {
   return out;
 }
 
-static String lastNBytesHexGrouped(size_t n, size_t groupSize) {
+static String lastNBytesDec(size_t n) {
   if (n == 0) return String("-");
-  if (groupSize == 0) groupSize = 1;
   if (n > RING_SIZE) n = RING_SIZE;
-
   String out;
-  // Rough reserve: "AA " per byte + "| " per group
-  out.reserve(n * 3 + (n / groupSize) * 3);
+  // Rough reserve: up to 3 digits + space each
+  out.reserve(n * 4);
 
   size_t start = (ringHead + RING_SIZE - n) % RING_SIZE;
   for (size_t i = 0; i < n; ++i) {
     uint8_t b = ringBuf[(start + i) % RING_SIZE];
-    out += hexByte(b);
+    out += String((unsigned)b);
+    if (i + 1 < n) out += ' ';
+  }
+  return out;
+}
 
-    bool isLast = (i + 1 == n);
-    bool endsGroup = ((i + 1) % groupSize == 0);
-    if (!isLast) {
-      out += endsGroup ? " | " : " ";
-    }
+static String lastNBytesAscii(size_t n) {
+  if (n == 0) return String("-");
+  if (n > RING_SIZE) n = RING_SIZE;
+  String out;
+  out.reserve(n);
+
+  size_t start = (ringHead + RING_SIZE - n) % RING_SIZE;
+  for (size_t i = 0; i < n; ++i) {
+    uint8_t b = ringBuf[(start + i) % RING_SIZE];
+    if (b == '\n') out += "\\n";
+    else if (b == '\r') out += "\\r";
+    else if (b == '\t') out += "\\t";
+    else if (b >= 32 && b <= 126) out += (char)b;
+    else out += '.';
   }
   return out;
 }
@@ -131,7 +141,7 @@ static String lastNFloatsText(size_t n) {
   if (n > (size_t)floatRingCount) n = (size_t)floatRingCount;
 
   String out;
-  out.reserve(n * 48);
+  out.reserve(n * 56);
 
   // Newest -> oldest
   for (size_t i = 0; i < n; ++i) {
@@ -148,9 +158,42 @@ static String lastNFloatsText(size_t n) {
   return out;
 }
 
+// JSON string escaping (critical: raw newlines/backslashes/quotes will break JSON parsing)
+static void jsonAppendEscaped(String &out, const String &in) {
+  for (size_t i = 0; i < (size_t)in.length(); ++i) {
+    char c = in[i];
+    switch (c) {
+      case '\"': out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\b': out += "\\b";  break;
+      case '\f': out += "\\f";  break;
+      case '\n': out += "\\n";  break;
+      case '\r': out += "\\r";  break;
+      case '\t': out += "\\t";  break;
+      default:
+        // Escape other control chars as \u00XX
+        if ((uint8_t)c < 0x20) {
+          char buf[7];
+          snprintf(buf, sizeof(buf), "\\u%04X", (unsigned)((uint8_t)c));
+          out += buf;
+        } else {
+          out += c;
+        }
+    }
+  }
+}
+
+static void jsonAddKV(String &json, const char *key, const String &value) {
+  json += "\"";
+  json += key;
+  json += "\":\"";
+  jsonAppendEscaped(json, value);
+  json += "\"";
+}
+
 static void handleRoot() {
   String html;
-  html.reserve(3300);
+  html.reserve(3600);
   html += "<!doctype html><html><head><meta charset='utf-8'/>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1'/>";
   html += "<title>ESP32 Serial Viewer</title>";
@@ -175,7 +218,9 @@ static void handleRoot() {
   html += "<div class='k'><b>Last byte:</b> <span id='lastb'>-</span></div>";
   html += "<div class='k'><b>Floats decoded:</b> <span id='floats'>0</span></div>";
   html += "</div>";
-  html += "<p><b>Last 64 bytes (hex, grouped by 4):</b></p><pre id='hex'>-</pre>";
+  html += "<p><b>Last bytes (hex):</b></p><pre id='hex'>-</pre>";
+  html += "<p><b>Last bytes (decimal):</b></p><pre id='dec'>-</pre>";
+  html += "<p><b>Last bytes (ASCII, non-printable shown as '.'): </b></p><pre id='asc'>-</pre>";
   html += "<p><b>Last float:</b> <span id='lf'>-</span> <span id='lfb'></span></p>";
   html += "<p><b>Last 12 floats (newest first):</b></p><pre id='fl'>-</pre>";
   html += "<div class='row'>";
@@ -195,6 +240,8 @@ static void handleRoot() {
   html += "document.getElementById('lastb').textContent=j.last_byte;";
   html += "document.getElementById('floats').textContent=j.floats_decoded;";
   html += "document.getElementById('hex').textContent=j.last_64_hex;";
+  html += "document.getElementById('dec').textContent=j.last_64_dec;";
+  html += "document.getElementById('asc').textContent=j.last_64_ascii;";
   html += "document.getElementById('lf').textContent=j.last_float;";
   html += "document.getElementById('lfb').textContent=j.last_float_bytes;";
   html += "document.getElementById('fl').textContent=j.last_floats;";
@@ -237,23 +284,26 @@ static void handleData() {
 
   size_t n = 64;
   if (totalBytes < n) n = (size_t)totalBytes;
-  // Group by 4 so floats/words are easier to see: "00 00 80 3F | ..."
-  String hex64 = lastNBytesHexGrouped(n, 4);
+  String hex64 = lastNBytesHex(n);
+  String dec64 = lastNBytesDec(n);
+  String asc64 = lastNBytesAscii(n);
   String lastFloats = lastNFloatsText(12);
 
   String json;
-  json.reserve(512 + hex64.length());
+  json.reserve(800 + hex64.length() + dec64.length() + asc64.length() + lastFloats.length());
   json += "{";
-  json += "\"wifi\":\"" + wifi + "\",";
-  json += "\"ip\":\"" + ip + "\",";
+  jsonAddKV(json, "wifi", wifi); json += ",";
+  jsonAddKV(json, "ip", ip); json += ",";
   json += "\"uptime_ms\":" + String(millis()) + ",";
   json += "\"total_bytes\":" + String(totalBytes) + ",";
-  json += "\"last_byte\":\"" + lastB + "\",";
+  jsonAddKV(json, "last_byte", lastB); json += ",";
   json += "\"floats_decoded\":" + String(floatsDecoded) + ",";
-  json += "\"last_64_hex\":\"" + hex64 + "\",";
-  json += "\"last_float\":\"" + lf + "\",";
-  json += "\"last_float_bytes\":\"" + lfb + "\",";
-  json += "\"last_floats\":\"" + lastFloats + "\"";
+  jsonAddKV(json, "last_64_hex", hex64); json += ",";
+  jsonAddKV(json, "last_64_dec", dec64); json += ",";
+  jsonAddKV(json, "last_64_ascii", asc64); json += ",";
+  jsonAddKV(json, "last_float", lf); json += ",";
+  jsonAddKV(json, "last_float_bytes", lfb); json += ",";
+  jsonAddKV(json, "last_floats", lastFloats);
   json += "}";
 
   server.send(200, "application/json; charset=utf-8", json);
@@ -356,9 +406,11 @@ static void readSerialNonBlocking() {
 }
 
 void setup() {
-  // Serial is used both for RX (your incoming bytes) and debug prints.
-  // If you need *zero* interference on Serial, set DEBUG_SERIAL to 0 above.
-  DBG_BEGIN(115200);
+  // Serial is REQUIRED for RX (incoming bytes), regardless of debug printing.
+  Serial.begin(115200);
+
+  // Debug prints (TX) share Serial. If Simulink is also receiving from the ESP32,
+  // debug output can corrupt that receive stream; in that case set DEBUG_SERIAL=0.
   DBG_PRINTLN();
   DBG_PRINTLN("ESP32 Serial->WiFi Viewer booting...");
 
