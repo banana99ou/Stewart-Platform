@@ -3,6 +3,176 @@
 #include <stdio.h>
 #include "geometry.h"
 
+// ---------------- WiFi debug viewer (optional) ----------------
+// This lets you inspect the last received serial command and parse status in a browser,
+// which is useful when Simulink owns the COM port.
+#ifndef STEWART_WIFI_DEBUG
+#define STEWART_WIFI_DEBUG 1
+#endif
+
+// ---------------- Serial logging (optional) ----------------
+// When Simulink is not reading from the ESP32, heavy Serial.print can block and cause jerky motion.
+// Set to 0 for smooth high-rate control.
+#ifndef STEWART_SERIAL_LOG
+#define STEWART_SERIAL_LOG 0
+#endif
+
+#if STEWART_SERIAL_LOG
+  #define SLOG_PRINT(x)    Serial.print(x)
+  #define SLOG_PRINT2(x,y) Serial.print((x),(y))
+  #define SLOG_PRINTLN(x)  Serial.println(x)
+  #define SLOG_PRINTF(...) Serial.printf(__VA_ARGS__)
+#else
+  #define SLOG_PRINT(x)    do {} while (0)
+  #define SLOG_PRINT2(x,y) do {} while (0)
+  #define SLOG_PRINTLN(x)  do {} while (0)
+  #define SLOG_PRINTF(...) do {} while (0)
+#endif
+
+#if STEWART_WIFI_DEBUG
+  #include <WiFi.h>
+  #include <WebServer.h>
+  #include <esp_system.h>
+
+  static const char *WIFI_SSID = "iptime";
+  static const char *WIFI_PASS = "Za!cW~QWdh5FC~f";
+  static WebServer dbgServer(80);
+
+  static String dbgLastLine = "";
+  static bool dbgLastParseOk = false;
+  static uint32_t dbgLinesTotal = 0;
+  static uint32_t dbgParseOk = 0;
+  static uint32_t dbgParseFail = 0;
+  static uint32_t dbgLastRxMs = 0;
+  static float dbgLastPose[6] = {0,0,0,0,0,0};
+
+  static void jsonAppendEscaped(String &out, const String &in) {
+    for (size_t i = 0; i < (size_t)in.length(); ++i) {
+      char c = in[i];
+      switch (c) {
+        case '\"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\b': out += "\\b";  break;
+        case '\f': out += "\\f";  break;
+        case '\n': out += "\\n";  break;
+        case '\r': out += "\\r";  break;
+        case '\t': out += "\\t";  break;
+        default:
+          if ((uint8_t)c < 0x20) {
+            char buf[7];
+            snprintf(buf, sizeof(buf), "\\u%04X", (unsigned)((uint8_t)c));
+            out += buf;
+          } else out += c;
+      }
+    }
+  }
+
+  static void jsonAddKV(String &json, const char *key, const String &value) {
+    json += "\""; json += key; json += "\":\"";
+    jsonAppendEscaped(json, value);
+    json += "\"";
+  }
+
+  static const char* resetReasonText(esp_reset_reason_t r) {
+    switch (r) {
+      case ESP_RST_POWERON: return "POWERON";
+      case ESP_RST_EXT:     return "EXT";
+      case ESP_RST_SW:      return "SW";
+      case ESP_RST_PANIC:   return "PANIC";
+      case ESP_RST_INT_WDT: return "INT_WDT";
+      case ESP_RST_TASK_WDT:return "TASK_WDT";
+      case ESP_RST_WDT:     return "WDT";
+      case ESP_RST_DEEPSLEEP:return "DEEPSLEEP";
+      case ESP_RST_BROWNOUT:return "BROWNOUT";
+      case ESP_RST_SDIO:    return "SDIO";
+      default:              return "UNKNOWN";
+    }
+  }
+
+  static void dbgHandleRoot() {
+    String html;
+    html.reserve(2600);
+    html += "<!doctype html><html><head><meta charset='utf-8'/>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'/>";
+    html += "<title>Stewart Serial Debug</title>";
+    html += "<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;}";
+    html += ".card{max-width:900px;border:1px solid #ddd;border-radius:12px;padding:16px;}";
+    html += "code,pre{background:#f6f8fa;border-radius:8px;padding:10px;display:block;overflow:auto;}</style>";
+    html += "</head><body><div class='card'>";
+    html += "<h2>Stewart Serial Debug</h2>";
+    html += "<div><b>IP:</b> <span id='ip'>...</span></div>";
+    html += "<div><b>Uptime (ms):</b> <span id='up'>...</span></div>";
+    html += "<div><b>Reset reason:</b> <span id='rr'>...</span></div>";
+    html += "<hr/>";
+    html += "<div><b>Lines total:</b> <span id='lt'>0</span></div>";
+    html += "<div><b>Parse OK / Fail:</b> <span id='ok'>0</span> / <span id='fail'>0</span></div>";
+    html += "<div><b>Last parse:</b> <span id='lp'>-</span></div>";
+    html += "<div><b>Last RX age (ms):</b> <span id='age'>-</span></div>";
+    html += "<p><b>Last line:</b></p><pre id='line'>-</pre>";
+    html += "<p><b>Last pose:</b></p><pre id='pose'>-</pre>";
+    html += "<button onclick='fetch(\"/clear\",{method:\"POST\"})'>Clear counters</button>";
+    html += "<p style='color:#666'>Polling <code>/data</code> every 250ms.</p>";
+    html += "</div><script>";
+    html += "async function tick(){const r=await fetch('/data',{cache:'no-store'});";
+    html += "const j=await r.json();";
+    html += "ip.textContent=j.ip; up.textContent=j.uptime_ms; rr.textContent=j.reset_reason;";
+    html += "lt.textContent=j.lines_total; ok.textContent=j.parse_ok; fail.textContent=j.parse_fail;";
+    html += "lp.textContent=j.last_parse; age.textContent=j.last_rx_age_ms;";
+    html += "line.textContent=j.last_line; pose.textContent=j.last_pose; }";
+    html += "setInterval(()=>tick().catch(()=>{}),250);tick().catch(()=>{});";
+    html += "</script></body></html>";
+    dbgServer.send(200, "text/html; charset=utf-8", html);
+  }
+
+  static void dbgHandleData() {
+    String json;
+    json.reserve(900 + dbgLastLine.length());
+    json += "{";
+    jsonAddKV(json, "ip", (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "0.0.0.0"); json += ",";
+    json += "\"uptime_ms\":" + String(millis()) + ",";
+    jsonAddKV(json, "reset_reason", resetReasonText(esp_reset_reason())); json += ",";
+    json += "\"lines_total\":" + String(dbgLinesTotal) + ",";
+    json += "\"parse_ok\":" + String(dbgParseOk) + ",";
+    json += "\"parse_fail\":" + String(dbgParseFail) + ",";
+    jsonAddKV(json, "last_parse", dbgLastParseOk ? "OK" : "FAIL"); json += ",";
+    uint32_t age = (dbgLastRxMs == 0) ? 0 : (millis() - dbgLastRxMs);
+    json += "\"last_rx_age_ms\":" + String(age) + ",";
+    jsonAddKV(json, "last_line", dbgLastLine); json += ",";
+    String pose;
+    pose.reserve(120);
+    pose += "x=" + String(dbgLastPose[0], 3);
+    pose += " y=" + String(dbgLastPose[1], 3);
+    pose += " z=" + String(dbgLastPose[2], 3);
+    pose += " roll=" + String(dbgLastPose[3], 3);
+    pose += " pitch=" + String(dbgLastPose[4], 3);
+    pose += " yaw=" + String(dbgLastPose[5], 3);
+    jsonAddKV(json, "last_pose", pose);
+    json += "}";
+    dbgServer.send(200, "application/json; charset=utf-8", json);
+  }
+
+  static void dbgHandleClear() {
+    dbgLinesTotal = 0;
+    dbgParseOk = 0;
+    dbgParseFail = 0;
+    dbgLastLine = "";
+    dbgLastParseOk = false;
+    dbgLastRxMs = 0;
+    for (int i = 0; i < 6; ++i) dbgLastPose[i] = 0.0f;
+    dbgServer.send(200, "text/plain; charset=utf-8", "ok");
+  }
+
+  static void dbgWiFiTick() {
+    static uint32_t lastKick = 0;
+    if (millis() - lastKick < 3000) return;
+    lastKick = millis();
+    if (WiFi.status() == WL_CONNECTED) return;
+    WiFi.disconnect(false, false);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+  }
+#endif
+
 // ---------------- Servo HW ----------------
 
 constexpr uint8_t NUM_SERVOS = 6;
@@ -215,7 +385,7 @@ bool pickSolution(float theta1, float theta2,
 }
 
 // Transform upper anchors by pose (same semantics as Python)
-void transformUpperAnchors(const Vec3 src[NUM_SERVOS], Vec3 dst[NUM_SERVOS],
+void transformUpperAnchors(const Vec3 src[], Vec3 dst[],
                            float dz, float rollDeg, float pitchDeg, float yawDeg,
                            float dx, float dy) {
   // center of plate
@@ -235,12 +405,12 @@ void transformUpperAnchors(const Vec3 src[NUM_SERVOS], Vec3 dst[NUM_SERVOS],
   for (int i = 0; i < NUM_SERVOS; ++i) dst[i] = tmp[i];
 }
 
-void computeAllServoAngles(const Vec3 bottom[NUM_SERVOS],
-                           const Vec3 horn0[NUM_SERVOS],
-                           const Vec3 upperT[NUM_SERVOS],
+void computeAllServoAngles(const Vec3 bottom[],
+                           const Vec3 horn0[],
+                           const Vec3 upperT[],
                            float L, float minDeg, float maxDeg,
-                           float outAngles[NUM_SERVOS],
-                           bool outSuccess[NUM_SERVOS]) {
+                           float outAngles[],
+                           bool outSuccess[]) {
   for (int i = 0; i < NUM_SERVOS; ++i) {
     Vec3 axis = getServoAxis(i);
     Mat3 R = buildServoFrame(axis);     // global -> local
@@ -299,19 +469,19 @@ bool applyPoseIK(float x, float y, float z,
   }
 
   if (!allOk) {
-    Serial.println("# IK failed for this pose; servos not moved.");
+    SLOG_PRINTLN("# IK failed for this pose; servos not moved.");
     return false;
   }
 
   // Drive servos: model 0° corresponds to 90° command.
-  Serial.print("# IK angles (deg):");
+  SLOG_PRINT("# IK angles (deg):");
   for (int i = 0; i < NUM_SERVOS; ++i) {
     int cmd = clampDeg((int)roundf(90.0f + angles[i]));
     servos[i].write(cmd);
-    Serial.print(' ');
-    Serial.print(angles[i], 2);
+    SLOG_PRINT(' ');
+    SLOG_PRINT2(angles[i], 2);
   }
-  Serial.println();
+  SLOG_PRINTLN();
   return true;
 }
 
@@ -367,21 +537,29 @@ void demoCircularMotion() {
 // ---------------- Serial command handling ----------------
 
 void handleSerial() {
+  // Deprecated: kept for compatibility with older code paths.
+  // We now use a non-blocking line parser in loop().
   String line = Serial.readStringUntil('\n');
   line.trim();
   if (line.length() == 0) return;
 
+#if STEWART_WIFI_DEBUG
+  dbgLastRxMs = millis();
+  dbgLinesTotal++;
+  dbgLastLine = line;
+#endif
+
   // Text commands: DEMO / DEMO CENTER / CENTER
   if (line.equalsIgnoreCase("DEMO") || line.equalsIgnoreCase("DEMO CENTER")) {
-    Serial.println("# Starting circular IK demo...");
+    SLOG_PRINTLN("# Starting circular IK demo...");
     demoCircularMotion();
-    Serial.println("# Demo done.");
+    SLOG_PRINTLN("# Demo done.");
     return;
   }
 
   if (line.equalsIgnoreCase("CENTER")) {
     for (uint8_t i = 0; i < NUM_SERVOS; i++) servos[i].write(90);
-    Serial.println("# centered to 90");
+    SLOG_PRINTLN("# centered to 90");
     return;
   }
 
@@ -389,24 +567,118 @@ void handleSerial() {
   float x, y, z, rollDeg, pitchDeg, yawDeg;
   if (sscanf(line.c_str(), "%f %f %f %f %f %f",
              &x, &y, &z, &rollDeg, &pitchDeg, &yawDeg) == 6) {
-    Serial.print("# Pose request: x="); Serial.print(x);
-    Serial.print(" y="); Serial.print(y);
-    Serial.print(" z="); Serial.print(z);
-    Serial.print(" roll="); Serial.print(rollDeg);
-    Serial.print(" pitch="); Serial.print(pitchDeg);
-    Serial.print(" yaw="); Serial.println(yawDeg);
+#if STEWART_WIFI_DEBUG
+    dbgLastParseOk = true;
+    dbgParseOk++;
+    dbgLastPose[0] = x;
+    dbgLastPose[1] = y;
+    dbgLastPose[2] = z;
+    dbgLastPose[3] = rollDeg;
+    dbgLastPose[4] = pitchDeg;
+    dbgLastPose[5] = yawDeg;
+#endif
+    SLOG_PRINT("# Pose request: x="); SLOG_PRINT(x);
+    SLOG_PRINT(" y="); SLOG_PRINT(y);
+    SLOG_PRINT(" z="); SLOG_PRINT(z);
+    SLOG_PRINT(" roll="); SLOG_PRINT(rollDeg);
+    SLOG_PRINT(" pitch="); SLOG_PRINT(pitchDeg);
+    SLOG_PRINT(" yaw="); SLOG_PRINTLN(yawDeg);
     applyPoseIK(x, y, z, rollDeg, pitchDeg, yawDeg,
                 -90.0f, 90.0f);
     return;
   }
 
-  Serial.println("# Unknown. Use: 'CENTER' | 'DEMO' | 'x y z roll pitch yaw'");
+#if STEWART_WIFI_DEBUG
+  dbgLastParseOk = false;
+  dbgParseFail++;
+#endif
+  SLOG_PRINTLN("# Unknown. Use: 'CENTER' | 'DEMO' | 'x y z roll pitch yaw'");
+}
+
+// ---------------- Non-blocking serial line parser ----------------
+static constexpr size_t RX_LINE_MAX = 160;
+static char rxLine[RX_LINE_MAX];
+static size_t rxLen = 0;
+
+static void processLine(const char *cstrLine) {
+  String line(cstrLine);
+  line.trim();
+  if (line.length() == 0) return;
+
+#if STEWART_WIFI_DEBUG
+  dbgLastRxMs = millis();
+  dbgLinesTotal++;
+  dbgLastLine = line;
+#endif
+
+  // Text commands: DEMO / DEMO CENTER / CENTER
+  if (line.equalsIgnoreCase("DEMO") || line.equalsIgnoreCase("DEMO CENTER")) {
+    SLOG_PRINTLN("# Starting circular IK demo...");
+    demoCircularMotion();
+    SLOG_PRINTLN("# Demo done.");
+    return;
+  }
+
+  if (line.equalsIgnoreCase("CENTER")) {
+    for (uint8_t i = 0; i < NUM_SERVOS; i++) servos[i].write(90);
+    SLOG_PRINTLN("# centered to 90");
+    return;
+  }
+
+  float x, y, z, rollDeg, pitchDeg, yawDeg;
+  if (sscanf(line.c_str(), "%f %f %f %f %f %f",
+             &x, &y, &z, &rollDeg, &pitchDeg, &yawDeg) == 6) {
+#if STEWART_WIFI_DEBUG
+    dbgLastParseOk = true;
+    dbgParseOk++;
+    dbgLastPose[0] = x;
+    dbgLastPose[1] = y;
+    dbgLastPose[2] = z;
+    dbgLastPose[3] = rollDeg;
+    dbgLastPose[4] = pitchDeg;
+    dbgLastPose[5] = yawDeg;
+#endif
+
+    applyPoseIK(x, y, z, rollDeg, pitchDeg, yawDeg, -90.0f, 90.0f);
+    return;
+  }
+
+#if STEWART_WIFI_DEBUG
+  dbgLastParseOk = false;
+  dbgParseFail++;
+#endif
+  SLOG_PRINTLN("# Unknown/parse fail");
+}
+
+static void serialPollLines() {
+  while (Serial.available() > 0) {
+    int v = Serial.read();
+    if (v < 0) break;
+    char c = (char)v;
+
+    if (c == '\r') continue;
+
+    if (c == '\n') {
+      rxLine[rxLen] = '\0';
+      processLine(rxLine);
+      rxLen = 0;
+      continue;
+    }
+
+    if (rxLen + 1 < RX_LINE_MAX) {
+      rxLine[rxLen++] = c;
+    } else {
+      // Overflow: drop the line to resync on next newline.
+      rxLen = 0;
+    }
+  }
 }
 
 // ---------------- Arduino setup/loop ----------------
 
 void setup() {
   Serial.begin(115200);
+  // We use a non-blocking parser; keep default timeout (doesn't matter unless handleSerial() is used).
 
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
@@ -421,10 +693,25 @@ void setup() {
 
   generateCoordinates();
 
-  Serial.println("Stewart Platform IK demo ready.");
-  Serial.println("Commands: CENTER | SET i angle | ALL angle | SWEEP i | DEMO");
+  SLOG_PRINTLN("Stewart Platform IK demo ready.");
+  SLOG_PRINTLN("Commands: CENTER | SET i angle | ALL angle | SWEEP i | DEMO");
+
+#if STEWART_WIFI_DEBUG
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  dbgServer.on("/", HTTP_GET, dbgHandleRoot);
+  dbgServer.on("/data", HTTP_GET, dbgHandleData);
+  dbgServer.on("/clear", HTTP_POST, dbgHandleClear);
+  dbgServer.begin();
+  SLOG_PRINTLN("# WiFi debug server started (port 80). Check router for IP.");
+#endif
 }
 
 void loop() {
-  if (Serial.available()) handleSerial();
+  serialPollLines();
+
+#if STEWART_WIFI_DEBUG
+  dbgWiFiTick();
+  dbgServer.handleClient();
+#endif
 }
