@@ -1,370 +1,430 @@
-/* Stewart Platform — Full IK, LH coordinates, ESP32 + ESP32Servo
- * - P/A/H are hard-coded (LH frame).
- * - Builder uses LH logic by negating roll & yaw inside the ZYX rotation.
- * - Command space: -90..+90 (0 = neutral). Clamp ±45 for safety.
- *
- * Serial commands:
- *   POSE  roll pitch yaw   x y z      -> solve & MOVE ALL legs
- *   IKALL roll pitch yaw   x y z      -> solve & PRINT ALL legs (no motion)
- *   IK i  roll pitch yaw   x y z      -> solve & print one leg
- *   MOVE i roll pitch yaw  x y z      -> solve & move one leg
- *   CENTER                           -> set all legs to cmd=0
- *   INV i                            -> toggle inversion on leg i
- */
+#include <ESP32Servo.h>
+#include <math.h>
+#include <stdio.h>
+#include "geometry.h"
 
- #include <ESP32Servo.h>
- #include <math.h>
- 
- /* ================= Configuration ================= */
- constexpr uint8_t  NUM_LEGS = 6;
- constexpr float    COMMAND_LIMIT_DEG = 45.0f;     // clamp command to ±45°
- constexpr float    BRANCH_HYSTERESIS_DEG = 2.0f;  // neutral bias margin
- 
- constexpr int      PWM_PULSE_MIN_US = 1000;
- constexpr int      PWM_PULSE_MAX_US = 2000;
- 
- const uint8_t      leg_servo_pins[NUM_LEGS] = {4,13,16,17,18,19};
- 
- /* Inversion tested OK on your hardware: {1,3,5} inverted */
- bool               leg_is_inverted[NUM_LEGS] = {false, false, false, false, false, false};
- 
- /* Optional small mechanical trims per leg (deg) */
- int                per_leg_trim_degrees[NUM_LEGS] = {0,0,0,0,0,0};
- 
- /* ================= Geometry (mm) ================= */
- constexpr float link_length_mm                 = 162.21128f; // |l|
- constexpr float horn_length_mm                 = 35.0f;
- constexpr float horn_offset_mm                 = 11.3f;
- constexpr float horn_vec_len_sq_mm2            = horn_length_mm*horn_length_mm
-                                                + horn_offset_mm*horn_offset_mm;
- 
- /* Bottom (servo) anchors P[i] — LH frame */
- float bottom_anchor_mm[NUM_LEGS][3] = {
-   { -50.000000f, 100.000000f, 10.000000f },
-   { -111.602540f,  -6.698730f, 10.000000f },
-   { -61.602540f, -93.301270f, 10.000000f },
-   {  61.602540f,  -93.301270f, 10.000000f },
-   { 111.602540f,   -6.698730f, 10.000000f },
-   {  50.000000f, 100.000000f, 10.000000f },
- };
- 
- /* Platform anchors A[i] — LH frame */
- float platform_anchor_mm[NUM_LEGS][3] = {
-   {  -7.500000f, 111.300000f, 152.500000f },
-   { -100.138627f, -49.154809f, 152.500000f },
-   { -92.638627f, -62.145191f, 152.500000f },
-   {  92.638627f, -62.145191f, 152.500000f },
-   { 100.138627f, -49.154809f, 152.500000f },
-   {   7.500000f, 111.300000f, 152.500000f },
- };
- 
- /* Horn base vectors H[i] at θ=0 (XY plane) — LH frame */
- float horn_base_vector_mm[NUM_LEGS][3] = {
-   { -11.300000f, 35.000000f, 0.000000f },
-   { 11.300000f, 35.000000f, 0.000000f },
-   { -35.960889f,  -7.713913f, 0.000000f },
-   { -35.960889f,  -7.713913f, 0.000000f },
-   { 24.660889f,  -27.286087f, 0.000000f },
-   { 24.660889f,  -27.286087f, 0.000000f },
- };
- 
- /* ================= Runtime state ================= */
- Servo leg_servo[NUM_LEGS];
- 
- /* Raw horn angle (deg) at neutral pose (R=I, T=0) per leg */
- float neutral_horn_angle_deg[NUM_LEGS];
- 
- /* Last commanded relative angle (deg) per leg (for continuity) */
- float last_command_deg[NUM_LEGS];
- 
- /* ================= Helpers ================= */
- static inline float clampf(float v, float lo, float hi){
-   return v < lo ? lo : (v > hi ? hi : v);
- }
- 
- /* Unwrap angle (deg) to be within ±180 of a reference (deg) */
- static inline float unwrap_deg_near(float angle_deg, float ref_deg){
-   while (angle_deg - ref_deg > 180.f)  angle_deg -= 360.f;
-   while (angle_deg - ref_deg < -180.f) angle_deg += 360.f;
-   return angle_deg;
- }
- 
- /* --- LH ZYX rotation: negate roll & yaw compared to RH builder --- */
- void build_rotation_matrix_zyx(float roll_rad, float pitch_rad, float yaw_rad, float R[3][3]){
-   const float cr = cosf(-roll_rad),  sr = sinf(-roll_rad);
-   const float cp = cosf( pitch_rad), sp = sinf( pitch_rad);
-   const float cy = cosf( -yaw_rad),  sy = sinf( -yaw_rad);
- 
-   R[0][0]=cy*cp;                R[0][1]=cy*sp*sr - sy*cr;   R[0][2]=cy*sp*cr + sy*sr;
-   R[1][0]=sy*cp;                R[1][1]=sy*sp*sr + cy*cr;   R[1][2]=sy*sp*cr - cy*sr;
-   R[2][0]=-sp;                  R[2][1]=cp*sr;              R[2][2]=cp*cr;
- }
- 
- /* ================= IK: two solutions for one leg ================= */
- bool compute_two_horn_angle_solutions_for_leg(
-   uint8_t leg_index,
-   const float R[3][3],
-   const float T_mm[3],
-   float &theta1_deg, float &theta2_deg,
-   // debug/inspection:
-   float s_vec_mm[3], float &scalar_a, float &scalar_b, float &scalar_gamma,
-   float &radius_r, float &ratio_x, float &phi_deg, float &d_deg
- ){
-   // s = R*A + T − P
-   float s[3];
-   for (uint8_t j=0; j<3; ++j){
-     s[j] = R[j][0]*platform_anchor_mm[leg_index][0]
-          + R[j][1]*platform_anchor_mm[leg_index][1]
-          + R[j][2]*platform_anchor_mm[leg_index][2]
-          + T_mm[j]
-          - bottom_anchor_mm[leg_index][j];
-   }
-   s_vec_mm[0]=s[0]; s_vec_mm[1]=s[1]; s_vec_mm[2]=s[2];
- 
-   // a cosθ + b sinθ = gamma  (u = ẑ, H.z = 0 ⇒ c=0)
-   scalar_a = s[0]*horn_base_vector_mm[leg_index][0]
-            + s[1]*horn_base_vector_mm[leg_index][1];
- 
-   // Keep RH "ẑ × H" term here (θ positive CCW); if you want θ positive CW, swap signs per earlier note.
-   scalar_b = s[0]*(-horn_base_vector_mm[leg_index][1])
-            + s[1]*( horn_base_vector_mm[leg_index][0]);
- 
-   const float s2 = s[0]*s[0] + s[1]*s[1] + s[2]*s[2];
-   scalar_gamma = 0.5f*(s2 + horn_vec_len_sq_mm2 - link_length_mm*link_length_mm);
- 
-   radius_r = sqrtf(scalar_a*scalar_a + scalar_b*scalar_b);
-   if (radius_r < 1e-9f) return false;
- 
-   ratio_x = scalar_gamma / radius_r;                 // may exceed [-1,1] slightly
-   const float x_clamped = clampf(ratio_x, -1.f, 1.f);
- 
-   const float phi_rad = atan2f(scalar_b, scalar_a);
-   const float d_rad   = acosf(x_clamped);
- 
-   phi_deg   = phi_rad * RAD_TO_DEG;
-   d_deg     = d_rad   * RAD_TO_DEG;
-   theta1_deg = (phi_rad + d_rad) * RAD_TO_DEG;
-   theta2_deg = (phi_rad - d_rad) * RAD_TO_DEG;
-   return true;
- }
- 
- /* Map command (−90..+90) to Servo.write(0..180) with inversion & trim */
- int map_command_to_servo_write(uint8_t leg_index, float command_deg){
-   const float clamped = clampf(command_deg, -COMMAND_LIMIT_DEG, +COMMAND_LIMIT_DEG);
-   float write_deg = 90.f + clamped + per_leg_trim_degrees[leg_index]; // neutral → 90°
-   int w = (int)roundf(write_deg);
-   if (leg_is_inverted[leg_index]) w = 180 - w;
-   if (w < 0) w = 0; else if (w > 180) w = 180;
-   return w;
- }
- 
- void write_leg(uint8_t leg_index, float command_deg){
-   int w = map_command_to_servo_write(leg_index, command_deg);
-   leg_servo[leg_index].write(w);
- }
- 
- /* ================= Neutral calibration ================= */
- void calibrate_neutral_pose(){
-   const float R_I[3][3] = {{1,0,0},{0,1,0},{0,0,1}};
-   const float T_0[3]    = {0,0,0};
- 
-   for (uint8_t i=0; i<NUM_LEGS; ++i){
-     float s[3], a,b,gamma,r,x,phi,d, t1,t2;
-     if (!compute_two_horn_angle_solutions_for_leg(i, R_I, T_0,
-           t1,t2, s,a,b,gamma,r,x,phi,d))
-     { t1=0; t2=180; }
- 
-     auto fold180 = [](float th){
-       while (th >= 180.f) th -= 360.f;
-       while (th <  -180.f) th += 360.f;
-       return th;
-     };
-     t1 = fold180(t1); t2 = fold180(t2);
-     neutral_horn_angle_deg[i] = (fabsf(t1) <= fabsf(t2)) ? t1 : t2;
-     last_command_deg[i] = 0.f;
-   }
- 
-   Serial.print("# neutral_horn_angle_deg: ");
-   for (uint8_t i=0;i<NUM_LEGS;i++){ Serial.print(neutral_horn_angle_deg[i],2); Serial.print(i==NUM_LEGS-1?'\n':' '); }
- }
- 
- /* ================= Solve & (optionally) move ALL legs ================= */
- void solve_pose_for_all_legs(const float R[3][3], const float T_mm[3],
-                              bool do_move, bool verbose){
-   for (uint8_t i=0; i<NUM_LEGS; ++i){
-     float s[3], a,b,gamma,r,x,phi,d, t1,t2;
-     bool ok = compute_two_horn_angle_solutions_for_leg(i, R, T_mm,
-                 t1,t2, s,a,b,gamma,r,x,phi,d);
-     if (!ok){
-       if (verbose) { Serial.print("leg "); Serial.print(i); Serial.println(": IK FAIL"); }
-       continue;
-     }
- 
-     // commands relative to neutral, with continuity
-     float cmd1 = unwrap_deg_near(t1 - neutral_horn_angle_deg[i], last_command_deg[i]);
-     float cmd2 = unwrap_deg_near(t2 - neutral_horn_angle_deg[i], last_command_deg[i]);
- 
-     // branch select: neutral bias + small hysteresis; else continuity
-     float cmd_pick;
-     if (fabsf(cmd1) + BRANCH_HYSTERESIS_DEG < fabsf(cmd2))       cmd_pick = cmd1;
-     else if (fabsf(cmd2) + BRANCH_HYSTERESIS_DEG < fabsf(cmd1))  cmd_pick = cmd2;
-     else cmd_pick = (fabsf(cmd1 - last_command_deg[i]) <= fabsf(cmd2 - last_command_deg[i])) ? cmd1 : cmd2;
- 
-     float cmd_clamped = cmd_pick; //clampf(cmd_pick, -COMMAND_LIMIT_DEG, +COMMAND_LIMIT_DEG);
- 
-     if (verbose){
-       Serial.print("leg "); Serial.print(i);
-       Serial.print(": cmd="); Serial.print(cmd_clamped,2);
-       Serial.print("  (t1="); Serial.print(t1,2);
-       Serial.print(", t2="); Serial.print(t2,2);
-       Serial.print(", t0="); Serial.print(neutral_horn_angle_deg[i],2);
-       Serial.print(", x=");  Serial.print(x,3);
-       Serial.println(")");
-     }
- 
-     if (do_move){
-       write_leg(i, cmd_clamped);
-       last_command_deg[i] = cmd_clamped;
-     }
-   }
- }
- 
- /* ================= Serial command handler ================= */
- void handle_serial(){
-   String line = Serial.readStringUntil('\n'); line.trim();
-   if (line.length()==0) return;
- 
-   if (line.equalsIgnoreCase("CENTER")){
-     for (uint8_t i=0;i<NUM_LEGS;i++){ write_leg(i, 0.f); last_command_deg[i]=0.f; }
-     Serial.println("# centered");
-     return;
-   }
-   if (line.startsWith("INV ")){
-     int i = line.substring(4).toInt();
-     if (i>=0 && i<NUM_LEGS){
-       leg_is_inverted[i] = !leg_is_inverted[i];
-       Serial.print("# invert["); Serial.print(i); Serial.print("] = ");
-       Serial.println(leg_is_inverted[i] ? "true":"false");
-     }
-     return;
-   }
- 
-   // Tokenize: head + six floats
-   String head; int sp1 = line.indexOf(' ');
-   if (sp1>0) head = line.substring(0, sp1);
-   auto need6 = [](){ Serial.println("# need 6 numbers: roll pitch yaw x y z"); };
-   auto parse6 = [&](int from, float out[6])->bool{
-     int k=0;
-     while (k<6){
-       int sp = line.indexOf(' ', from);
-       String tok = (sp<0) ? line.substring(from) : line.substring(from, sp);
-       tok.trim(); if(tok.length()==0) return false;
-       out[k++] = tok.toFloat();
-       if (sp<0) break; from = sp+1;
-     }
-     return k==6;
-   };
- 
-   if (head.equalsIgnoreCase("POSE") || head.equalsIgnoreCase("IKALL")
-       || head.equalsIgnoreCase("IK") || head.equalsIgnoreCase("MOVE")){
-     float v[6]; if (!parse6(sp1+1, v)) { need6(); return; }
- 
-     const float roll_rad  = v[0] * DEG_TO_RAD;
-     const float pitch_rad = v[1] * DEG_TO_RAD;
-     const float yaw_rad   = v[2] * DEG_TO_RAD;
- 
-     // NOTE: This preserves your last test mapping: {-x, +y, -z}.
-     // If you want pure LH everywhere, change to: { v[3], v[4], v[5] }.
-     const float T_mm[3]   = { -v[3],  v[4],  -v[5] };
- 
-     float R[3][3]; build_rotation_matrix_zyx(roll_rad, pitch_rad, yaw_rad, R);
- 
-     if (head.equalsIgnoreCase("POSE")){
-       solve_pose_for_all_legs(R, T_mm, /*move=*/true,  /*verbose=*/true);
-       return;
-     }
-     if (head.equalsIgnoreCase("IKALL")){
-       solve_pose_for_all_legs(R, T_mm, /*move=*/false, /*verbose=*/true);
-       return;
-     }
-     // Single-leg modes kept for focused debugging:
-     if (head.equalsIgnoreCase("IK") || head.equalsIgnoreCase("MOVE")){
-       // Expect an index before the six floats → reparse with index
-       // Format: "IK i roll pitch yaw x y z" / "MOVE i ..."
-       int sp2 = line.indexOf(' ', sp1+1);
-       if (sp2<0){ Serial.println("# IK/MOVE: need index + 6 numbers"); return; }
-       int leg_index = line.substring(sp1+1, sp2).toInt();
-       float vv[6]; if (!parse6(sp2+1, vv)) { need6(); return; }
- 
-       const float rr = vv[0] * DEG_TO_RAD;
-       const float pp = vv[1] * DEG_TO_RAD;
-       const float yy = vv[2] * DEG_TO_RAD;
-       const float TT[3] = { -vv[3], vv[4], -vv[5] };
-       float RR[3][3]; build_rotation_matrix_zyx(rr, pp, yy, RR);
- 
-       float s[3], a,b,gamma,r,x,phi,d, t1,t2;
-       if (!compute_two_horn_angle_solutions_for_leg(leg_index, RR, TT, t1,t2, s,a,b,gamma,r,x,phi,d)){
-         Serial.println("# IK FAIL");
-         return;
-       }
-       float cmd1 = unwrap_deg_near(t1 - neutral_horn_angle_deg[leg_index], last_command_deg[leg_index]);
-       float cmd2 = unwrap_deg_near(t2 - neutral_horn_angle_deg[leg_index], last_command_deg[leg_index]);
- 
-       float pick;
-       if (fabsf(cmd1) + BRANCH_HYSTERESIS_DEG < fabsf(cmd2))       pick = cmd1;
-       else if (fabsf(cmd2) + BRANCH_HYSTERESIS_DEG < fabsf(cmd1))  pick = cmd2;
-       else pick = (fabsf(cmd1 - last_command_deg[leg_index]) <= fabsf(cmd2 - last_command_deg[leg_index])) ? cmd1 : cmd2;
- 
-       float pickC = clampf(pick, -COMMAND_LIMIT_DEG, +COMMAND_LIMIT_DEG);
-       int w = map_command_to_servo_write(leg_index, pickC);
- 
-       Serial.print("LEG "); Serial.println(leg_index);
-       Serial.print("s = ["); Serial.print(s[0],3); Serial.print(", "); Serial.print(s[1],3); Serial.print(", "); Serial.print(s[2],3); Serial.println("]");
-       Serial.print("a="); Serial.print(a,6); Serial.print(" b="); Serial.print(b,6);
-       Serial.print(" gamma="); Serial.print(gamma,6); Serial.print(" r="); Serial.print(r,6);
-       Serial.print(" x="); Serial.println(x,6);
-       Serial.print("t1="); Serial.print(t1,3); Serial.print(" t2="); Serial.println(t2,3);
-       Serial.print("t0="); Serial.print(neutral_horn_angle_deg[leg_index],3);
-       Serial.print(" cmd1="); Serial.print(cmd1,3); Serial.print(" cmd2="); Serial.println(cmd2,3);
-       Serial.print("pick="); Serial.print(pick,3); Serial.print(" clamped="); Serial.println(pickC,3);
-       Serial.print("-> writeDeg="); Serial.println(w);
- 
-       if (head.equalsIgnoreCase("MOVE")){
-         write_leg(leg_index, pickC);
-         last_command_deg[leg_index] = pickC;
-       }
-       return;
-     }
-   }
- 
-   Serial.println("# Unknown. Use: POSE | IKALL | IK i ... | MOVE i ... | CENTER | INV i");
- }
- 
- /* ================= setup / loop ================= */
- void setup(){
-   Serial.begin(115200);
- 
-   ESP32PWM::allocateTimer(0);
-   ESP32PWM::allocateTimer(1);
-   ESP32PWM::allocateTimer(2);
-   ESP32PWM::allocateTimer(3);
- 
-   for (uint8_t i=0;i<NUM_LEGS;i++){
-     leg_servo[i].setPeriodHertz(50);
-     leg_servo[i].attach(leg_servo_pins[i], PWM_PULSE_MIN_US, PWM_PULSE_MAX_US);
-     leg_servo[i].write(90); // neutral hold
-   }
- 
-   calibrate_neutral_pose();
- 
-   Serial.println("Full IK ready.");
-   Serial.println("POSE r p y  x y z   -> move all");
-   Serial.println("IKALL r p y  x y z  -> print all");
-   Serial.println("IK i r p y  x y z   | MOVE i r p y  x y z");
-   Serial.println("CENTER | INV i");
- }
- 
- void loop(){
-   if (Serial.available()) handle_serial();
- }
- 
+// ---------------- Servo HW ----------------
+
+constexpr uint8_t NUM_SERVOS = 6;
+constexpr int PWM_PULSE_MIN_US = 1000;
+constexpr int PWM_PULSE_MAX_US = 2000;
+
+const uint8_t servo_pins[NUM_SERVOS] = {4, 13, 16, 17, 18, 19};
+Servo servos[NUM_SERVOS];
+
+static inline int clampDeg(int d) {
+  if (d < 0) return 0;
+  if (d > 180) return 180;
+  return d;
+}
+
+// ---------------- Math helpers ----------------
+
+const float DEG2RAD = 3.14159265358979323846f / 180.0f;
+
+static inline Vec3 v3(float x, float y, float z) { Vec3 r = {x, y, z}; return r; }
+
+static inline Vec3 vAdd(const Vec3 &a, const Vec3 &b) { return v3(a.x + b.x, a.y + b.y, a.z + b.z); }
+static inline Vec3 vSub(const Vec3 &a, const Vec3 &b) { return v3(a.x - b.x, a.y - b.y, a.z - b.z); }
+static inline Vec3 vScale(const Vec3 &a, float s) { return v3(a.x * s, a.y * s, a.z * s); }
+static inline float vDot(const Vec3 &a, const Vec3 &b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+static inline Vec3 vCross(const Vec3 &a, const Vec3 &b) {
+  return v3(a.y * b.z - a.z * b.y,
+            a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x);
+}
+static inline float vNorm(const Vec3 &a) { return sqrtf(vDot(a, a)); }
+static inline Vec3 vNormed(const Vec3 &a) {
+  float n = vNorm(a);
+  if (n < 1e-6f) return v3(0, 0, 0);
+  return vScale(a, 1.0f / n);
+}
+
+static inline Vec3 rotateZ(const Vec3 &p, float deg) {
+  float rad = deg * DEG2RAD;
+  float c = cosf(rad), s = sinf(rad);
+  return v3(p.x * c - p.y * s, p.x * s + p.y * c, p.z);
+}
+
+static inline Vec3 rotateX(const Vec3 &p, float deg) {
+  float rad = deg * DEG2RAD;
+  float c = cosf(rad), s = sinf(rad);
+  return v3(p.x, p.y * c - p.z * s, p.y * s + p.z * c);
+}
+
+static inline Vec3 rotateY(const Vec3 &p, float deg) {
+  float rad = deg * DEG2RAD;
+  float c = cosf(rad), s = sinf(rad);
+  return v3(p.x * c + p.z * s, p.y, -p.x * s + p.z * c);
+}
+
+static inline Vec3 translate(const Vec3 &p, float dx, float dy, float dz) {
+  return v3(p.x + dx, p.y + dy, p.z + dz);
+}
+
+static inline Vec3 mirrorX(const Vec3 &p) {
+  return v3(-p.x, p.y, p.z);
+}
+
+static inline Vec3 mat3Mul(const Mat3 &R, const Vec3 &v) {
+  return v3(
+    R.m[0][0] * v.x + R.m[0][1] * v.y + R.m[0][2] * v.z,
+    R.m[1][0] * v.x + R.m[1][1] * v.y + R.m[1][2] * v.z,
+    R.m[2][0] * v.x + R.m[2][1] * v.y + R.m[2][2] * v.z
+  );
+}
+
+static inline Mat3 mat3Transpose(const Mat3 &R) {
+  Mat3 Rt;
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      Rt.m[i][j] = R.m[j][i];
+  return Rt;
+}
+
+// ---------------- Geometry constants ----------------
+
+const float LINK_LENGTH = 162.21128f; // mm (ball link center to center)
+
+// Base geometry for servo 1 (same as Python)
+// NOTE: name uses suffix to avoid Arduino's binary macros B0/B1.
+const Vec3 B1_pos = {-50.0f, 100.0f, 10.0f};
+const Vec3 H1     = {-85.0f, 108.0f + 3.3f / 2.0f, 10.0f};
+const Vec3 U1     = { -7.5f, 108.0f + 3.3f / 2.0f, 152.5f};
+
+Vec3 bottomAnchor[NUM_SERVOS];
+Vec3 horn0Anchor[NUM_SERVOS];
+Vec3 upperAnchor[NUM_SERVOS];
+
+void generateCoordinates() {
+  // servos 1,3,5: rotations of servo1
+  float anglesZ[3] = {0.0f, 120.0f, 240.0f};
+  for (int i = 0; i < 3; ++i) {
+    int idx = i * 2; // 0,2,4
+    bottomAnchor[idx] = rotateZ(B1_pos, anglesZ[i]);
+    horn0Anchor[idx]   = rotateZ(H1, anglesZ[i]);
+    upperAnchor[idx]  = rotateZ(U1, anglesZ[i]);
+  }
+
+  // servos 2,4,6: X-mirror of servo1 rotated
+  Vec3 B1m = mirrorX(B1_pos);
+  Vec3 H1m = mirrorX(H1);
+  Vec3 U1m = mirrorX(U1);
+
+  bottomAnchor[1] = rotateZ(B1m, 120.0f);
+  horn0Anchor[1]   = rotateZ(H1m, 120.0f);
+  upperAnchor[1]  = rotateZ(U1m, 120.0f);
+
+  bottomAnchor[3] = rotateZ(B1m, 240.0f);
+  horn0Anchor[3]   = rotateZ(H1m, 240.0f);
+  upperAnchor[3]  = rotateZ(U1m, 240.0f);
+
+  bottomAnchor[5] = B1m;
+  horn0Anchor[5]   = H1m;
+  upperAnchor[5]  = U1m;
+}
+
+// ---------------- Servo axis frames ----------------
+
+Vec3 getServoAxis(int idx) {
+  // axes lie in XY plane, radially outward
+  Vec3 baseAxis = v3(0.0f, 1.0f, 0.0f);
+  float angle;
+  if (idx == 0 || idx == 5) {
+    angle = 0.0f;
+  } else if (idx == 1 || idx == 2) {
+    angle = 120.0f;
+  } else if (idx == 3 || idx == 4) {
+    angle = -120.0f;
+  } else {
+    angle = 0.0f;
+  }
+  Vec3 a = rotateZ(baseAxis, angle);
+  return vNormed(a);
+}
+
+Mat3 buildServoFrame(const Vec3 &axis) {
+  Vec3 ez = axis;
+  Vec3 ref = v3(0.0f, 0.0f, 1.0f);
+  if (fabsf(vDot(ref, ez)) > 0.99f)
+    ref = v3(1.0f, 0.0f, 0.0f);
+  Vec3 ex = vNormed(vCross(ref, ez));
+  Vec3 ey = vCross(ez, ex);
+
+  Mat3 R;
+  R.m[0][0] = ex.x; R.m[0][1] = ex.y; R.m[0][2] = ex.z;
+  R.m[1][0] = ey.x; R.m[1][1] = ey.y; R.m[1][2] = ey.z;
+  R.m[2][0] = ez.x; R.m[2][1] = ez.y; R.m[2][2] = ez.z;
+  return R;
+}
+
+// ---------------- IK core ----------------
+
+bool solveServoAngleZAxis(const Vec3 &B, const Vec3 &H0,
+                          const Vec3 &Utarget, float L,
+                          float &theta1Deg, float &theta2Deg) {
+  Vec3 h = vSub(H0, B);
+  Vec3 s = vSub(Utarget, B);
+
+  float a = s.x * h.x + s.y * h.y;
+  float b = -s.x * h.y + s.y * h.x;
+  float gamma = 0.5f * (vDot(s, s) + vDot(h, h) - L * L);
+  float gamma_p = gamma - s.z * h.z;
+
+  float r = hypotf(a, b);
+  if (r < 1e-6f) return false;
+
+  float x = gamma_p / r;
+  if (x < -1.0f || x > 1.0f) return false;
+
+  float phi = atan2f(b, a);
+  float d = acosf(x);
+
+  theta1Deg = (phi + d) * 180.0f / 3.14159265358979323846f;
+  theta2Deg = (phi - d) * 180.0f / 3.14159265358979323846f;
+  return true;
+}
+
+bool pickSolution(float theta1, float theta2,
+                  float minDeg, float maxDeg,
+                  float preferDeg, float &outDeg) {
+  float candidates[2];
+  int n = 0;
+  float ts[2] = {theta1, theta2};
+  for (int i = 0; i < 2; ++i) {
+    float t = ts[i];
+    float tn = fmodf(t + 180.0f, 360.0f);
+    if (tn < 0) tn += 360.0f;
+    tn -= 180.0f;
+    if (tn >= minDeg && tn <= maxDeg) {
+      candidates[n++] = tn;
+    }
+  }
+  if (n == 0) return false;
+  float best = candidates[0];
+  float bestDiff = fabsf(best - preferDeg);
+  for (int i = 1; i < n; ++i) {
+    float d = fabsf(candidates[i] - preferDeg);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = candidates[i];
+    }
+  }
+  outDeg = best;
+  return true;
+}
+
+// Transform upper anchors by pose (same semantics as Python)
+void transformUpperAnchors(const Vec3 src[NUM_SERVOS], Vec3 dst[NUM_SERVOS],
+                           float dz, float rollDeg, float pitchDeg, float yawDeg,
+                           float dx, float dy) {
+  // center of plate
+  Vec3 center = v3(0, 0, 0);
+  for (int i = 0; i < NUM_SERVOS; ++i) center = vAdd(center, src[i]);
+  center = vScale(center, 1.0f / NUM_SERVOS);
+
+  Vec3 tmp[NUM_SERVOS];
+  for (int i = 0; i < NUM_SERVOS; ++i) {
+    tmp[i] = vSub(src[i], center);
+    tmp[i] = rotateX(tmp[i], rollDeg);
+    tmp[i] = rotateY(tmp[i], pitchDeg);
+    tmp[i] = rotateZ(tmp[i], yawDeg);
+    tmp[i] = vAdd(tmp[i], center);
+    tmp[i] = translate(tmp[i], dx, dy, dz);
+  }
+  for (int i = 0; i < NUM_SERVOS; ++i) dst[i] = tmp[i];
+}
+
+void computeAllServoAngles(const Vec3 bottom[NUM_SERVOS],
+                           const Vec3 horn0[NUM_SERVOS],
+                           const Vec3 upperT[NUM_SERVOS],
+                           float L, float minDeg, float maxDeg,
+                           float outAngles[NUM_SERVOS],
+                           bool outSuccess[NUM_SERVOS]) {
+  for (int i = 0; i < NUM_SERVOS; ++i) {
+    Vec3 axis = getServoAxis(i);
+    Mat3 R = buildServoFrame(axis);     // global -> local
+    Mat3 Rt = mat3Transpose(R);
+
+    Vec3 B = bottom[i];
+    Vec3 H0 = horn0[i];
+    Vec3 U  = upperT[i];
+
+    Vec3 hLocal = mat3Mul(R, vSub(H0, B));
+    Vec3 uLocal = mat3Mul(R, vSub(U,  B));
+
+    // Local origin in servo frame; name avoids Arduino's B0 macro.
+    Vec3 originLocal = v3(0, 0, 0);
+    float t1, t2;
+    if (!solveServoAngleZAxis(originLocal, hLocal, uLocal, L, t1, t2)) {
+      outSuccess[i] = false;
+      outAngles[i] = 0.0f;
+      continue;
+    }
+
+    float theta;
+    if (!pickSolution(t1, t2, minDeg, maxDeg, 0.0f, theta)) {
+      outSuccess[i] = false;
+      outAngles[i] = 0.0f;
+      continue;
+    }
+
+    // Store IK angle (relative to model 0°)
+    outSuccess[i] = true;
+    outAngles[i] = theta;
+    // If you wanted horn positions, you’d rotate hLocal by theta and map back with Rt.
+  }
+}
+
+// Apply a single pose (x,y,z,roll,pitch,yaw) via IK and drive servos
+// x,y,z in mm; roll,pitch,yaw in degrees.
+bool applyPoseIK(float x, float y, float z,
+                 float rollDeg, float pitchDeg, float yawDeg,
+                 float minDeg, float maxDeg) {
+  Vec3 upperT[NUM_SERVOS];
+  float angles[NUM_SERVOS];
+  bool  ok[NUM_SERVOS];
+
+  transformUpperAnchors(upperAnchor, upperT,
+                        z, rollDeg, pitchDeg, yawDeg,
+                        x, y);
+
+  computeAllServoAngles(bottomAnchor, horn0Anchor, upperT,
+                        LINK_LENGTH, minDeg, maxDeg,
+                        angles, ok);
+
+  bool allOk = true;
+  for (int i = 0; i < NUM_SERVOS; ++i) {
+    if (!ok[i]) { allOk = false; break; }
+  }
+
+  if (!allOk) {
+    Serial.println("# IK failed for this pose; servos not moved.");
+    return false;
+  }
+
+  // Drive servos: model 0° corresponds to 90° command.
+  Serial.print("# IK angles (deg):");
+  for (int i = 0; i < NUM_SERVOS; ++i) {
+    int cmd = clampDeg((int)roundf(90.0f + angles[i]));
+    servos[i].write(cmd);
+    Serial.print(' ');
+    Serial.print(angles[i], 2);
+  }
+  Serial.println();
+  return true;
+}
+
+// ---------------- Circular motion, normal toward (0,0,50) ----------------
+
+void demoCircularMotion() {
+  const float radius_mm = 50.0f;
+  const float dz        = 0.0f;
+  const float baseRoll  = 0.0f;
+  const float basePitch = 0.0f;
+  const float baseYaw   = 0.0f;
+  const int   nSteps    = 180;
+  const float minDeg    = -90.0f;
+  const float maxDeg    =  90.0f;
+  const float tiltDeg   = 10.0f; // how much to lean outward
+
+  Vec3 upperT[NUM_SERVOS];
+  float angles[NUM_SERVOS];
+  bool  ok[NUM_SERVOS];
+
+  for (int step = 0; step < nSteps; ++step) {
+    float tDeg = (360.0f / nSteps) * step;
+    float rad = tDeg * DEG2RAD;
+    float dx = radius_mm * cosf(rad);
+    float dy = radius_mm * sinf(rad);
+
+    // Lean plate so that its normal tilts radially outward in XY
+    // (-normal points approximately toward (0,0,50)).
+    float rollStep  = -tiltDeg * (dy / radius_mm);
+    float pitchStep =  tiltDeg * (dx / radius_mm);
+    float rollCmd   = baseRoll  + rollStep;
+    float pitchCmd  = basePitch + pitchStep;
+
+    transformUpperAnchors(upperAnchor, upperT,
+                          dz, rollCmd, pitchCmd, baseYaw,
+                          dx, dy);
+
+    computeAllServoAngles(bottomAnchor, horn0Anchor, upperT,
+                          LINK_LENGTH, minDeg, maxDeg,
+                          angles, ok);
+
+    // Drive servos: assume model 0° corresponds to 90° command.
+    for (int i = 0; i < NUM_SERVOS; ++i) {
+      if (!ok[i]) continue; // skip on failure to avoid wild motion
+      int cmd = clampDeg((int)roundf(90.0f + angles[i]));
+      servos[i].write(cmd);
+    }
+
+    delay(40); // ~25 Hz
+  }
+}
+
+// ---------------- Serial command handling ----------------
+
+void handleSerial() {
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line.length() == 0) return;
+
+  // Text commands: DEMO / DEMO CENTER / CENTER
+  if (line.equalsIgnoreCase("DEMO") || line.equalsIgnoreCase("DEMO CENTER")) {
+    Serial.println("# Starting circular IK demo...");
+    demoCircularMotion();
+    Serial.println("# Demo done.");
+    return;
+  }
+
+  if (line.equalsIgnoreCase("CENTER")) {
+    for (uint8_t i = 0; i < NUM_SERVOS; i++) servos[i].write(90);
+    Serial.println("# centered to 90");
+    return;
+  }
+
+  // Numeric pose: "x y z roll pitch yaw"
+  float x, y, z, rollDeg, pitchDeg, yawDeg;
+  if (sscanf(line.c_str(), "%f %f %f %f %f %f",
+             &x, &y, &z, &rollDeg, &pitchDeg, &yawDeg) == 6) {
+    Serial.print("# Pose request: x="); Serial.print(x);
+    Serial.print(" y="); Serial.print(y);
+    Serial.print(" z="); Serial.print(z);
+    Serial.print(" roll="); Serial.print(rollDeg);
+    Serial.print(" pitch="); Serial.print(pitchDeg);
+    Serial.print(" yaw="); Serial.println(yawDeg);
+    applyPoseIK(x, y, z, rollDeg, pitchDeg, yawDeg,
+                -90.0f, 90.0f);
+    return;
+  }
+
+  Serial.println("# Unknown. Use: 'CENTER' | 'DEMO' | 'x y z roll pitch yaw'");
+}
+
+// ---------------- Arduino setup/loop ----------------
+
+void setup() {
+  Serial.begin(115200);
+
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+
+  for (uint8_t i = 0; i < NUM_SERVOS; i++) {
+    servos[i].setPeriodHertz(50);
+    servos[i].attach(servo_pins[i], PWM_PULSE_MIN_US, PWM_PULSE_MAX_US);
+    servos[i].write(90);
+  }
+
+  generateCoordinates();
+
+  Serial.println("Stewart Platform IK demo ready.");
+  Serial.println("Commands: CENTER | SET i angle | ALL angle | SWEEP i | DEMO");
+}
+
+void loop() {
+  if (Serial.available()) handleSerial();
+}
