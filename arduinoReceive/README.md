@@ -34,3 +34,20 @@ This sketch keeps reading **Serial bytes from Simulink** and shows them on a sim
 - If bytes move but “Last float” looks wrong, your float packing or endianness may differ.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
