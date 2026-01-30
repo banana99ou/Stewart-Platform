@@ -14,7 +14,7 @@
 // When Simulink is not reading from the ESP32, heavy Serial.print can block and cause jerky motion.
 // Set to 0 for smooth high-rate control.
 #ifndef STEWART_SERIAL_LOG
-#define STEWART_SERIAL_LOG 0
+#define STEWART_SERIAL_LOG 1
 #endif
 
 #if STEWART_SERIAL_LOG
@@ -164,9 +164,26 @@
 
   static void dbgWiFiTick() {
     static uint32_t lastKick = 0;
+    static wl_status_t lastStatus = WL_IDLE_STATUS;
+
+    // Print IP once when we successfully connect.
+    wl_status_t st = WiFi.status();
+    if (st == WL_CONNECTED) {
+      if (lastStatus != WL_CONNECTED) {
+        IPAddress ip = WiFi.localIP();
+        Serial.print("# WiFi connected. IP: ");
+        Serial.println(ip);
+        Serial.print("# Open: http://");
+        Serial.print(ip);
+        Serial.println("/");
+      }
+      lastStatus = st;
+      return;
+    }
+    lastStatus = st;
+
     if (millis() - lastKick < 3000) return;
     lastKick = millis();
-    if (WiFi.status() == WL_CONNECTED) return;
     WiFi.disconnect(false, false);
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -384,7 +401,10 @@ bool pickSolution(float theta1, float theta2,
   return true;
 }
 
-// Transform upper anchors by pose (same semantics as Python)
+// Transform upper anchors by pose (same semantics as Python).
+// Convention (right-hand rule, Z up):
+//   - pitch: rotation about +X
+//   - roll : rotation about +Y
 void transformUpperAnchors(const Vec3 src[], Vec3 dst[],
                            float dz, float rollDeg, float pitchDeg, float yawDeg,
                            float dx, float dy) {
@@ -393,11 +413,17 @@ void transformUpperAnchors(const Vec3 src[], Vec3 dst[],
   for (int i = 0; i < NUM_SERVOS; ++i) center = vAdd(center, src[i]);
   center = vScale(center, 1.0f / NUM_SERVOS);
 
+  // convert yaw to -180 to 180 range
+  if(yawDeg > 180.0f) {
+    yawDeg = yawDeg - 360.0f;
+  }
+
   Vec3 tmp[NUM_SERVOS];
   for (int i = 0; i < NUM_SERVOS; ++i) {
     tmp[i] = vSub(src[i], center);
-    tmp[i] = rotateX(tmp[i], rollDeg);
-    tmp[i] = rotateY(tmp[i], pitchDeg);
+    // Apply pitch (X), then roll (Y), then yaw (Z)
+    tmp[i] = rotateX(tmp[i], -pitchDeg);
+    tmp[i] = rotateY(tmp[i], -rollDeg);
     tmp[i] = rotateZ(tmp[i], yawDeg);
     tmp[i] = vAdd(tmp[i], center);
     tmp[i] = translate(tmp[i], dx, dy, dz);
@@ -481,7 +507,7 @@ bool applyPoseIK(float x, float y, float z,
     SLOG_PRINT(' ');
     SLOG_PRINT2(angles[i], 2);
   }
-  SLOG_PRINTLN();
+  SLOG_PRINTLN("");
   return true;
 }
 
@@ -510,8 +536,9 @@ void demoCircularMotion() {
 
     // Lean plate so that its normal tilts radially outward in XY
     // (-normal points approximately toward (0,0,50)).
-    float rollStep  = -tiltDeg * (dy / radius_mm);
-    float pitchStep =  tiltDeg * (dx / radius_mm);
+    // With our convention and small angles: n_xy ≈ (roll, -pitch).
+    float rollStep  = tiltDeg * (dx / radius_mm);
+    float pitchStep = -tiltDeg * (dy / radius_mm);
     float rollCmd   = baseRoll  + rollStep;
     float pitchCmd  = basePitch + pitchStep;
 
