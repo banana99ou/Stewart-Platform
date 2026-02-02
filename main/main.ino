@@ -271,13 +271,13 @@ static inline Mat3 mat3Transpose(const Mat3 &R) {
 
 // ---------------- Geometry constants ----------------
 
-const float LINK_LENGTH = 162.21128f; // mm (ball link center to center)
+const float LINK_LENGTH = 127.0f; // mm (ball link center to center)
 
 // Base geometry for servo 1 (same as Python)
 // NOTE: name uses suffix to avoid Arduino's binary macros B0/B1.
 const Vec3 B1_pos = {-50.0f, 100.0f, 10.0f};
-const Vec3 H1     = {-85.0f, 108.0f + 3.3f / 2.0f, 10.0f};
-const Vec3 U1     = { -7.5f, 108.0f + 3.3f / 2.0f, 152.5f};
+const Vec3 H1     = {-97.5f, 108.0f + 3.3f / 2.0f, 10.0f};
+const Vec3 U1     = { -7.5f, 108.0f + 3.3f / 2.0f, 99.60469f};
 
 Vec3 bottomAnchor[NUM_SERVOS];
 Vec3 horn0Anchor[NUM_SERVOS];
@@ -347,26 +347,39 @@ Mat3 buildServoFrame(const Vec3 &axis) {
 
 // ---------------- IK core ----------------
 
+// Solve for the two possible servo angles (about Z axis) to reach Utarget,
+// given base anchor B, horn anchor H0 (at 0 deg), and target upper anchor Utarget.
+// L is the linkage length. Outputs: theta1Deg/theta2Deg in degrees.
+//
+// Returns true if there is a solution, false if unreachable.
 bool solveServoAngleZAxis(const Vec3 &B, const Vec3 &H0,
                           const Vec3 &Utarget, float L,
                           float &theta1Deg, float &theta2Deg) {
+  // "h": horn offset vector (relative to base anchor)
   Vec3 h = vSub(H0, B);
+  // "s": desired end effector position relative to base anchor
   Vec3 s = vSub(Utarget, B);
 
-  float a = s.x * h.x + s.y * h.y;
-  float b = -s.x * h.y + s.y * h.x;
+  // Compute geometric terms a, b (in-plane projections)
+  float a = s.x * h.x + s.y * h.y;         // dot product for alignment
+  float b = -s.x * h.y + s.y * h.x;        // orthogonal (for atan2)
+  // Half the squared distance difference to encode linkage constraint
   float gamma = 0.5f * (vDot(s, s) + vDot(h, h) - L * L);
+  // Apply Z (height) difference, ignoring planar linkage error due to height difference
   float gamma_p = gamma - s.z * h.z;
 
+  // r is the effective length, used for arc-cosine solution
   float r = hypotf(a, b);
-  if (r < 1e-6f) return false;
+  if (r < 1e-6f) return false;  // linkage collapsed, numerically unstable
 
+  // x is the cosine of the angle between two vectors, must be within physical range
   float x = gamma_p / r;
-  if (x < -1.0f || x > 1.0f) return false;
+  if (x < -1.0f || x > 1.0f) return false; // unattainable
 
-  float phi = atan2f(b, a);
-  float d = acosf(x);
+  float phi = atan2f(b, a);    // base argument
+  float d = acosf(x);          // solution offset
 
+  // Two possible solutions (elbow up/down)
   theta1Deg = (phi + d) * 180.0f / 3.14159265358979323846f;
   theta2Deg = (phi - d) * 180.0f / 3.14159265358979323846f;
   return true;
@@ -455,6 +468,7 @@ void computeAllServoAngles(const Vec3 bottom[],
     if (!solveServoAngleZAxis(originLocal, hLocal, uLocal, L, t1, t2)) {
       outSuccess[i] = false;
       outAngles[i] = 0.0f;
+      Serial.println("IK failed for servo " + String(i) + " with hLocal " + String(hLocal.x) + ", " + String(hLocal.y) + ", " + String(hLocal.z) + " and uLocal " + String(uLocal.x) + ", " + String(uLocal.y) + ", " + String(uLocal.z));
       continue;
     }
 
@@ -462,6 +476,7 @@ void computeAllServoAngles(const Vec3 bottom[],
     if (!pickSolution(t1, t2, minDeg, maxDeg, 0.0f, theta)) {
       outSuccess[i] = false;
       outAngles[i] = 0.0f;
+      Serial.println("IK failed for servo " + String(i) + " with angles " + String(t1) + " and " + String(t2));
       continue;
     }
 
@@ -481,13 +496,9 @@ bool applyPoseIK(float x, float y, float z,
   float angles[NUM_SERVOS];
   bool  ok[NUM_SERVOS];
 
-  transformUpperAnchors(upperAnchor, upperT,
-                        z, rollDeg, pitchDeg, yawDeg,
-                        x, y);
+  transformUpperAnchors(upperAnchor, upperT, z, rollDeg, pitchDeg, yawDeg, x, y);
 
-  computeAllServoAngles(bottomAnchor, horn0Anchor, upperT,
-                        LINK_LENGTH, minDeg, maxDeg,
-                        angles, ok);
+  computeAllServoAngles(bottomAnchor, horn0Anchor, upperT, LINK_LENGTH, minDeg, maxDeg, angles, ok);
 
   bool allOk = true;
   for (int i = 0; i < NUM_SERVOS; ++i) {
