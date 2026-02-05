@@ -1,0 +1,14 @@
+flowchart LR
+  XP["X-Plane\nDynamics + State"]
+  SL["Simulink Host\nPose generation + Logging"]
+  ESP["ESP32 - Stewart MCU\nFirmware IK + Saturation\n6x RC servos"]
+  PX4["PX4 - Pix32 v6\nIMU + Estimator\nActuator outputs"]
+
+  XP -->|UDP state| SL
+  SL -->|UDP control| XP
+
+  SL -->|USB Serial: x y z roll pitch yaw (LF)| ESP
+  ESP -->|Physical motion| PX4
+  PX4 -->|MAVLink: attitude + actuators| SL
+
+
