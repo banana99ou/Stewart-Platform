@@ -32,11 +32,13 @@
 #if STEWART_WIFI_DEBUG
   #include <WiFi.h>
   #include <WebServer.h>
+  #include <WiFiUdp.h>
   #include <esp_system.h>
 
   static const char *WIFI_SSID = "iptime";
   static const char *WIFI_PASS = "Za!cW~QWdh5FC~f";
   static WebServer dbgServer(80);
+  static WiFiUDP dbgUdp;
 
   static String dbgLastLine = "";
   static bool dbgLastParseOk = false;
@@ -45,6 +47,65 @@
   static uint32_t dbgParseFail = 0;
   static uint32_t dbgLastRxMs = 0;
   static float dbgLastPose[6] = {0,0,0,0,0,0};
+
+  // --------------- Status/ACK telemetry (Serial + UDP) ---------------
+  // Goal: emit a small machine-parsable message per pose command so you can
+  // compute end-to-end latency and saturation/IK outcomes.
+  //
+  // Design notes:
+  // - UDP is lossy; that's fine for metrics, but don't rely on it for control.
+  // - Keep messages short to avoid impacting motion (Serial can block if host isn't reading).
+  #ifndef STEWART_STATUS_SERIAL
+  #define STEWART_STATUS_SERIAL 1
+  #endif
+
+  #ifndef STEWART_STATUS_UDP
+  #define STEWART_STATUS_UDP 1
+  #endif
+
+  // UDP destination:
+  // - If STATUS_UDP_HOST is a valid IP string, use that.
+  // - Else (empty/invalid), send to WiFi.broadcastIP().
+  static const char *STATUS_UDP_HOST = ""; // e.g. "192.168.0.10" (PC) or "" for broadcast
+  static const uint16_t STATUS_UDP_PORT = 14551;
+
+  enum StatusFlags : uint32_t {
+    ST_CMD_POSE        = 1u << 0,
+    ST_PARSE_OK        = 1u << 1,
+    ST_PARSE_FAIL      = 1u << 2,
+    ST_SAT_APPLIED     = 1u << 3,
+    ST_IK_OK           = 1u << 4,
+    ST_IK_FAIL         = 1u << 5,
+    ST_RX_OVERFLOW     = 1u << 6,
+    ST_WIFI_CONNECTED  = 1u << 7,
+    ST_Z_CLAMPED       = 1u << 8,
+  };
+
+  static uint32_t gPoseSeq = 0; // increments on each parsed pose command
+
+  static IPAddress statusUdpDest() {
+    if (STATUS_UDP_HOST && STATUS_UDP_HOST[0] != '\0') {
+      IPAddress ip;
+      if (ip.fromString(STATUS_UDP_HOST)) return ip;
+    }
+    return (WiFi.status() == WL_CONNECTED) ? WiFi.broadcastIP() : IPAddress(255,255,255,255);
+  }
+
+  static void emitStatusLine(const char *cstr) {
+  #if STEWART_STATUS_SERIAL
+    Serial.println(cstr);
+  #endif
+
+  #if STEWART_STATUS_UDP
+    if (WiFi.status() == WL_CONNECTED) {
+      IPAddress dst = statusUdpDest();
+      if (dbgUdp.beginPacket(dst, STATUS_UDP_PORT)) {
+        dbgUdp.write((const uint8_t*)cstr, strlen(cstr));
+        dbgUdp.endPacket();
+      }
+    }
+  #endif
+  }
 
   static void jsonAppendEscaped(String &out, const String &in) {
     for (size_t i = 0; i < (size_t)in.length(); ++i) {
@@ -188,16 +249,74 @@
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
   }
+
+  static const char* statusWordFrom(uint32_t flags) {
+    if (flags & ST_RX_OVERFLOW) return "RX_OVERFLOW";
+    if (flags & ST_PARSE_FAIL)  return "PARSE_FAIL";
+    if (flags & ST_IK_FAIL)     return "IK_FAIL";
+    if (flags & ST_SAT_APPLIED) return "SAT";
+    return "OK";
+  }
+
+  static void flagsToTokens(uint32_t flags, char *out, size_t outCap) {
+    // Produces a compact token list like: "POSE|WIFI|SAT|IK_OK"
+    // Always null-terminated.
+    if (outCap == 0) return;
+    out[0] = '\0';
+
+    auto add = [&](const char *tok) {
+      if (!tok || !tok[0]) return;
+      size_t len = strlen(out);
+      size_t tlen = strlen(tok);
+      if (len == 0) {
+        if (tlen + 1 > outCap) return;
+        memcpy(out, tok, tlen + 1);
+      } else {
+        if (len + 1 + tlen + 1 > outCap) return;
+        out[len] = '|';
+        memcpy(out + len + 1, tok, tlen + 1);
+      }
+    };
+
+    if (flags & ST_CMD_POSE)       add("POSE");
+    if (flags & ST_PARSE_OK)       add("PARSE_OK");
+    if (flags & ST_PARSE_FAIL)     add("PARSE_FAIL");
+    if (flags & ST_RX_OVERFLOW)    add("RX_OVERFLOW");
+    if (flags & ST_WIFI_CONNECTED) add("WIFI");
+    if (flags & ST_SAT_APPLIED)    add("SAT");
+    if (flags & ST_IK_OK)          add("IK_OK");
+    if (flags & ST_IK_FAIL)        add("IK_FAIL");
+    if (flags & ST_Z_CLAMPED)      add("Z_CLAMP");
+  }
 #endif
 
 // ---------------- Servo HW ----------------
 
 constexpr uint8_t NUM_SERVOS = 6;
-constexpr int PWM_PULSE_MIN_US = 1000;
-constexpr int PWM_PULSE_MAX_US = 2000;
+constexpr int PWM_PULSE_MIN_US = 500;
+constexpr int PWM_PULSE_MAX_US = 2450;
 
 const uint8_t servo_pins[NUM_SERVOS] = {4, 13, 16, 17, 18, 19};
 Servo servos[NUM_SERVOS];
+
+// ---------------- Geometry globals (forward declarations) ----------------
+// These are defined later, but referenced by helper functions above their definitions.
+// Keeping declarations here also avoids Arduino's auto-prototype step tripping over
+// undeclared identifiers in function signatures/bodies.
+extern const float LINK_LENGTH; // mm (ball link center to center)
+extern Vec3 bottomAnchor[NUM_SERVOS];
+extern Vec3 horn0Anchor[NUM_SERVOS];
+extern Vec3 upperAnchor[NUM_SERVOS];
+
+// ---------------- Servo calibration ----------------
+// The IK solver outputs angles in degrees around the modeled "0°" horn pose.
+// Real hardware needs per-servo calibration:
+// - center offset (what write(deg) corresponds to modeled 0°)
+// - sign (some servos may be mirrored in installation)
+//
+// Defaults preserve current behavior: model 0° -> write(90), positive angle adds degrees.
+static float SERVO_CENTER_DEG[NUM_SERVOS] = {92, 90, 92, 88, 88, 89};
+static float SERVO_SIGN[NUM_SERVOS]       = { 1,  1,  1,  1,  1,  1};
 
 static inline int clampDeg(int d) {
   if (d < 0) return 0;
@@ -208,6 +327,7 @@ static inline int clampDeg(int d) {
 // ---------------- Math helpers ----------------
 
 const float DEG2RAD = 3.14159265358979323846f / 180.0f;
+const float RAD2DEG = 180.0f / 3.14159265358979323846f;
 
 static inline Vec3 v3(float x, float y, float z) { Vec3 r = {x, y, z}; return r; }
 
@@ -261,12 +381,344 @@ static inline Vec3 mat3Mul(const Mat3 &R, const Vec3 &v) {
   );
 }
 
+static inline Mat3 mat3MulMat(const Mat3 &A, const Mat3 &B) {
+  Mat3 C;
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      float s = 0.0f;
+      for (int k = 0; k < 3; ++k) s += A.m[i][k] * B.m[k][j];
+      C.m[i][j] = s;
+    }
+  }
+  return C;
+}
+
+static inline Mat3 mat3Identity() {
+  Mat3 I;
+  I.m[0][0] = 1; I.m[0][1] = 0; I.m[0][2] = 0;
+  I.m[1][0] = 0; I.m[1][1] = 1; I.m[1][2] = 0;
+  I.m[2][0] = 0; I.m[2][1] = 0; I.m[2][2] = 1;
+  return I;
+}
+
 static inline Mat3 mat3Transpose(const Mat3 &R) {
   Mat3 Rt;
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j)
       Rt.m[i][j] = R.m[j][i];
   return Rt;
+}
+
+// ---------------- Rotation-magnitude saturator ----------------
+// Saturate overall rotation magnitude by scaling in axis-angle (rotation-vector) space,
+// while preserving the rotation axis. This avoids the "clamp each Euler axis" artifact.
+//
+// IMPORTANT: This uses the same Euler convention as transformUpperAnchors():
+//   p' = Rz(yaw) * Ry(-roll) * Rx(-pitch) * p
+//
+// Adaptive saturation: max rotation magnitude depends strongly on Z.
+// We embed a z->maxMagDeg lookup from a Python reachability sweep and interpolate.
+//
+// Notes:
+// - The values are "inscribed sphere radius" in rotation-vector space (conservative).
+// - We clamp z into the table range before lookup.
+#ifndef STEWART_ROT_SAT_ENABLE
+#define STEWART_ROT_SAT_ENABLE 1
+#endif
+
+// Reachability sweep results (worst-case max rotation magnitude vs z) for z in [-22, +25] mm, step 1mm.
+// Generated from `rot_boundary_z_sweep.npz` (n_dirs=300, tol=0.25deg).
+static const float ROT_SAT_WORST_DEG[48] = {
+  0.000000f, 0.468750f, 0.937500f, 1.406250f, 1.875000f, 2.343750f, 2.812500f, 3.281250f,
+  3.750000f, 4.218750f, 4.687500f, 5.156250f, 5.390625f, 5.859375f, 6.328125f, 6.796875f,
+  7.265625f, 7.968750f, 8.437500f, 8.906250f, 9.375000f, 9.843750f, 10.312500f, 10.781250f,
+  11.250000f, 11.718750f, 12.187500f, 12.656250f, 13.125000f, 13.828125f, 14.296875f, 14.765625f,
+  15.234375f, 15.703125f, 16.171875f, 16.875000f, 17.343750f, 17.812500f, 18.281250f, 18.750000f,
+  19.453125f, 19.921875f, 20.390625f, 20.859375f, 21.562500f, 22.031250f, 22.500000f, 23.203125f
+};
+static const float ROT_SAT_Z_MIN_MM = -22.0f;
+static const float ROT_SAT_Z_STEP_MM = 1.0f;
+static const float ROT_SAT_Z_MAX_MM = ROT_SAT_Z_MIN_MM + ROT_SAT_Z_STEP_MM * (float)(sizeof(ROT_SAT_WORST_DEG) / sizeof(ROT_SAT_WORST_DEG[0]) - 1);
+
+// Optional safety margin (deg) subtracted from the interpolated limit.
+static const float ROT_SAT_MARGIN_DEG = 0.5f;
+
+static inline float rotSatLimitDegForZ(float zMm, bool &zClamped) {
+  zClamped = false;
+  float z0 = zMm;
+  float zc = zMm;
+  if (zc < ROT_SAT_Z_MIN_MM) { zc = ROT_SAT_Z_MIN_MM; zClamped = true; }
+  if (zc > ROT_SAT_Z_MAX_MM) { zc = ROT_SAT_Z_MAX_MM; zClamped = true; }
+
+  // Index in table
+  float t = (zc - ROT_SAT_Z_MIN_MM) / ROT_SAT_Z_STEP_MM;
+  int i0 = (int)floorf(t);
+  float frac = t - (float)i0;
+  int n = (int)(sizeof(ROT_SAT_WORST_DEG) / sizeof(ROT_SAT_WORST_DEG[0]));
+  if (i0 < 0) { i0 = 0; frac = 0.0f; }
+  if (i0 >= n - 1) { i0 = n - 1; frac = 0.0f; }
+  int i1 = (i0 < n - 1) ? (i0 + 1) : i0;
+
+  float a = ROT_SAT_WORST_DEG[i0];
+  float b = ROT_SAT_WORST_DEG[i1];
+  float lim = a + frac * (b - a);
+  lim = fmaxf(0.0f, lim - ROT_SAT_MARGIN_DEG);
+
+  (void)z0; // for debugging if needed
+  return lim;
+}
+
+static inline float clampf(float x, float lo, float hi) {
+  if (x < lo) return lo;
+  if (x > hi) return hi;
+  return x;
+}
+
+static inline float wrapDeg180(float d) {
+  // Wrap to (-180, 180]
+  while (d > 180.0f) d -= 360.0f;
+  while (d <= -180.0f) d += 360.0f;
+  return d;
+}
+
+static inline Mat3 rotXMat(float deg) {
+  float r = deg * DEG2RAD;
+  float c = cosf(r), s = sinf(r);
+  Mat3 R;
+  R.m[0][0] = 1; R.m[0][1] = 0;  R.m[0][2] = 0;
+  R.m[1][0] = 0; R.m[1][1] = c;  R.m[1][2] = -s;
+  R.m[2][0] = 0; R.m[2][1] = s;  R.m[2][2] = c;
+  return R;
+}
+
+static inline Mat3 rotYMat(float deg) {
+  float r = deg * DEG2RAD;
+  float c = cosf(r), s = sinf(r);
+  Mat3 R;
+  R.m[0][0] = c;  R.m[0][1] = 0; R.m[0][2] = s;
+  R.m[1][0] = 0;  R.m[1][1] = 1; R.m[1][2] = 0;
+  R.m[2][0] = -s; R.m[2][1] = 0; R.m[2][2] = c;
+  return R;
+}
+
+static inline Mat3 rotZMat(float deg) {
+  float r = deg * DEG2RAD;
+  float c = cosf(r), s = sinf(r);
+  Mat3 R;
+  R.m[0][0] = c;  R.m[0][1] = -s; R.m[0][2] = 0;
+  R.m[1][0] = s;  R.m[1][1] = c;  R.m[1][2] = 0;
+  R.m[2][0] = 0;  R.m[2][1] = 0;  R.m[2][2] = 1;
+  return R;
+}
+
+static inline Mat3 eulerToMat_Arduino(float rollDeg, float pitchDeg, float yawDeg) {
+  // Matches transformUpperAnchors(): rotateX(-pitch), then rotateY(-roll), then rotateZ(yaw).
+  Mat3 Rx = rotXMat(-pitchDeg);
+  Mat3 Ry = rotYMat(-rollDeg);
+  Mat3 Rz = rotZMat(yawDeg);
+  return mat3MulMat(Rz, mat3MulMat(Ry, Rx));
+}
+
+static inline void matToEuler_Arduino(const Mat3 &R, float &rollDeg, float &pitchDeg, float &yawDeg) {
+  // Invert R = Rz(yaw) * Ry(-roll) * Rx(-pitch)
+  float alpha = atan2f(R.m[2][1], R.m[2][2]);               // alpha = -pitch (rad)
+  float beta  = asinf(clampf(-R.m[2][0], -1.0f, 1.0f));     // beta  = -roll  (rad)
+  float gamma = atan2f(R.m[1][0], R.m[0][0]);               // gamma = yaw    (rad)
+  pitchDeg = (-alpha) * RAD2DEG;
+  rollDeg  = (-beta)  * RAD2DEG;
+  yawDeg   = (gamma)  * RAD2DEG;
+  yawDeg   = wrapDeg180(yawDeg);
+}
+
+static inline Mat3 axisAngleToMat(const Vec3 &axisUnit, float angleRad) {
+  // Rodrigues: R = I + sin(th)K + (1-cos(th))K^2
+  float th = angleRad;
+  if (fabsf(th) < 1e-12f) return mat3Identity();
+  Vec3 k = axisUnit;
+  float kx = k.x, ky = k.y, kz = k.z;
+
+  Mat3 K;
+  K.m[0][0] = 0;   K.m[0][1] = -kz; K.m[0][2] = ky;
+  K.m[1][0] = kz;  K.m[1][1] = 0;   K.m[1][2] = -kx;
+  K.m[2][0] = -ky; K.m[2][1] = kx;  K.m[2][2] = 0;
+
+  Mat3 K2 = mat3MulMat(K, K);
+  float s = sinf(th);
+  float c = cosf(th);
+
+  Mat3 R = mat3Identity();
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      R.m[i][j] = R.m[i][j] + s * K.m[i][j] + (1.0f - c) * K2.m[i][j];
+    }
+  }
+  return R;
+}
+
+static inline void matToAxisAngle(const Mat3 &R, Vec3 &axisUnit, float &angleRad) {
+  // angle in [0, pi]
+  float tr = R.m[0][0] + R.m[1][1] + R.m[2][2];
+  float c = clampf((tr - 1.0f) * 0.5f, -1.0f, 1.0f);
+  float th = acosf(c);
+  angleRad = th;
+
+  if (th < 1e-8f) {
+    axisUnit = v3(1, 0, 0);
+    angleRad = 0.0f;
+    return;
+  }
+
+  float s = sinf(th);
+  if (fabsf(s) > 1e-6f) {
+    float inv = 1.0f / (2.0f * s);
+    axisUnit = vNormed(v3(
+      (R.m[2][1] - R.m[1][2]) * inv,
+      (R.m[0][2] - R.m[2][0]) * inv,
+      (R.m[1][0] - R.m[0][1]) * inv
+    ));
+    return;
+  }
+
+  // Near pi: diagonal-based extraction
+  float A00 = (R.m[0][0] + 1.0f) * 0.5f;
+  float A11 = (R.m[1][1] + 1.0f) * 0.5f;
+  float A22 = (R.m[2][2] + 1.0f) * 0.5f;
+  float kx = sqrtf(fmaxf(A00, 0.0f));
+  float ky = sqrtf(fmaxf(A11, 0.0f));
+  float kz = sqrtf(fmaxf(A22, 0.0f));
+  if ((R.m[2][1] - R.m[1][2]) < 0.0f) kx = -kx;
+  if ((R.m[0][2] - R.m[2][0]) < 0.0f) ky = -ky;
+  if ((R.m[1][0] - R.m[0][1]) < 0.0f) kz = -kz;
+  axisUnit = vNormed(v3(kx, ky, kz));
+}
+
+static inline void transformUpperAnchorsMat(const Vec3 src[], Vec3 dst[],
+                                           const Mat3 &R,
+                                           float dz, float dx, float dy) {
+  // Rotate about center (same as transformUpperAnchors), then translate.
+  Vec3 center = v3(0, 0, 0);
+  for (int i = 0; i < NUM_SERVOS; ++i) center = vAdd(center, src[i]);
+  center = vScale(center, 1.0f / NUM_SERVOS);
+
+  for (int i = 0; i < NUM_SERVOS; ++i) {
+    Vec3 p = vSub(src[i], center);
+    p = mat3Mul(R, p);
+    p = vAdd(p, center);
+    dst[i] = translate(p, dx, dy, dz);
+  }
+}
+
+// Last-pose status fields (for telemetry emission in processLine()).
+static bool gLastSatApplied = false;
+static float gLastSatMagInDeg = 0.0f;
+static float gLastSatMagOutDeg = 0.0f;
+static uint8_t gLastIkOkMask = 0; // bit i = leg i ok
+static float gLastReqRoll = 0.0f, gLastReqPitch = 0.0f, gLastReqYaw = 0.0f;
+static float gLastAppliedRoll = 0.0f, gLastAppliedPitch = 0.0f, gLastAppliedYaw = 0.0f;
+static float gLastSatLimitDeg = 0.0f;
+static bool gLastZClamped = false;
+
+static inline bool solvePoseIKNoMove(
+  float x, float y, float z,
+  const Mat3 &Rpose,
+  float minDeg, float maxDeg,
+  float *outAngles,
+  bool *outOk
+) {
+  Vec3 upperT[NUM_SERVOS];
+  transformUpperAnchorsMat(upperAnchor, upperT, Rpose, z, x, y);
+  computeAllServoAngles(bottomAnchor, horn0Anchor, upperT, LINK_LENGTH, minDeg, maxDeg, outAngles, outOk);
+  for (int i = 0; i < NUM_SERVOS; ++i) {
+    if (!outOk[i]) return false;
+  }
+  return true;
+}
+
+static inline Mat3 axisAngleFromEuler_Arduino(float rollDeg, float pitchDeg, float yawDeg,
+                                              Vec3 &axisUnit, float &angleRad) {
+  Mat3 R = eulerToMat_Arduino(rollDeg, pitchDeg, yawDeg);
+  matToAxisAngle(R, axisUnit, angleRad);
+  return R;
+}
+
+static inline bool saturateRotationByIKDirection(
+  float x, float y, float z,
+  float &rollDeg, float &pitchDeg, float &yawDeg,
+  float minDeg, float maxDeg,
+  float &magInDeg, float &magOutDeg,
+  float &guessLimitDeg, bool &zClamped,
+  uint8_t &okMaskOut,
+  float *outAngles
+) {
+  // Build requested rotation (axis-angle)
+  Vec3 axis;
+  float th;
+  Mat3 Rreq = axisAngleFromEuler_Arduino(rollDeg, pitchDeg, yawDeg, axis, th);
+  magInDeg = th * RAD2DEG;
+
+  // z-table is used only as an *initial guess* for bracketing; it is NOT a hard cap.
+  guessLimitDeg = rotSatLimitDegForZ(z, zClamped);
+
+  // First try requested pose directly
+  bool ok[NUM_SERVOS];
+  if (solvePoseIKNoMove(x, y, z, Rreq, minDeg, maxDeg, outAngles, ok)) {
+    okMaskOut = 0;
+    for (int i = 0; i < NUM_SERVOS; ++i) if (ok[i]) okMaskOut |= (uint8_t)(1u << i);
+    magOutDeg = magInDeg;
+    return false; // no saturation applied
+  }
+
+  // If requested fails, binary-search along the same axis-angle direction (scale angle).
+  // We need a known-good lower bound.
+  float anglesTmp[NUM_SERVOS];
+  bool ok0[NUM_SERVOS];
+  Mat3 R0 = mat3Identity();
+  if (!solvePoseIKNoMove(x, y, z, R0, minDeg, maxDeg, anglesTmp, ok0)) {
+    // Even zero-rotation failed at this translation/z: no saturation can fix.
+    okMaskOut = 0;
+    for (int i = 0; i < NUM_SERVOS; ++i) if (ok0[i]) okMaskOut |= (uint8_t)(1u << i);
+    magOutDeg = 0.0f;
+    return false;
+  }
+
+  float hi = th;
+  float lo = 0.0f;
+
+  // If we have a nonzero guess, try it to get a tighter bracket.
+  float guessRad = guessLimitDeg * DEG2RAD;
+  if (guessRad > 1e-6f && guessRad < hi) {
+    Mat3 Rg = axisAngleToMat(axis, guessRad);
+    bool okg[NUM_SERVOS];
+    if (solvePoseIKNoMove(x, y, z, Rg, minDeg, maxDeg, anglesTmp, okg)) {
+      lo = guessRad;
+    } else {
+      hi = guessRad;
+    }
+  }
+
+  // Fixed-iteration bisection (keeps runtime bounded)
+  for (int it = 0; it < 7; ++it) { // ~0.8% resolution on [0,hi]
+    float mid = 0.5f * (lo + hi);
+    Mat3 Rm = axisAngleToMat(axis, mid);
+    bool okm[NUM_SERVOS];
+    if (solvePoseIKNoMove(x, y, z, Rm, minDeg, maxDeg, anglesTmp, okm)) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  // Use lo as applied angle
+  Mat3 Rs = axisAngleToMat(axis, lo);
+  bool oks[NUM_SERVOS];
+  bool okAll = solvePoseIKNoMove(x, y, z, Rs, minDeg, maxDeg, outAngles, oks);
+  okMaskOut = 0;
+  for (int i = 0; i < NUM_SERVOS; ++i) if (oks[i]) okMaskOut |= (uint8_t)(1u << i);
+
+  float rDeg = lo * RAD2DEG;
+  magOutDeg = rDeg;
+  matToEuler_Arduino(Rs, rollDeg, pitchDeg, yawDeg);
+  return okAll; // saturation applied (and should be OK)
 }
 
 // ---------------- Geometry constants ----------------
@@ -492,20 +944,59 @@ void computeAllServoAngles(const Vec3 bottom[],
 bool applyPoseIK(float x, float y, float z,
                  float rollDeg, float pitchDeg, float yawDeg,
                  float minDeg, float maxDeg) {
-  Vec3 upperT[NUM_SERVOS];
   float angles[NUM_SERVOS];
-  bool  ok[NUM_SERVOS];
+  bool ok[NUM_SERVOS];
 
-  transformUpperAnchors(upperAnchor, upperT, z, rollDeg, pitchDeg, yawDeg, x, y);
+  // Default telemetry values
+  gLastSatApplied = false;
+  gLastSatMagInDeg = 0.0f;
+  gLastSatMagOutDeg = 0.0f;
+  gLastSatLimitDeg = 0.0f;
+  gLastZClamped = false;
 
-  computeAllServoAngles(bottomAnchor, horn0Anchor, upperT, LINK_LENGTH, minDeg, maxDeg, angles, ok);
-
-  bool allOk = true;
-  for (int i = 0; i < NUM_SERVOS; ++i) {
-    if (!ok[i]) { allOk = false; break; }
+#if STEWART_ROT_SAT_ENABLE
+  {
+    float mi = 0.0f, mo = 0.0f, lim = 0.0f;
+    bool zClamped = false;
+    uint8_t okMask = 0;
+    bool satApplied = saturateRotationByIKDirection(
+      x, y, z,
+      rollDeg, pitchDeg, yawDeg,
+      minDeg, maxDeg,
+      mi, mo,
+      lim, zClamped,
+      okMask,
+      angles
+    );
+    gLastSatApplied = satApplied;
+    gLastSatMagInDeg = mi;
+    gLastSatMagOutDeg = mo;
+    gLastSatLimitDeg = lim;
+    gLastZClamped = zClamped;
+    gLastIkOkMask = okMask;
   }
+#else
+  {
+    // No saturation: just solve once
+    Mat3 R = eulerToMat_Arduino(rollDeg, pitchDeg, yawDeg);
+    bool okAll = solvePoseIKNoMove(x, y, z, R, minDeg, maxDeg, angles, ok);
+    uint8_t okMask = 0;
+    for (int i = 0; i < NUM_SERVOS; ++i) if (ok[i]) okMask |= (uint8_t)(1u << i);
+    gLastIkOkMask = okMask;
+    if (!okAll) {
+      SLOG_PRINTLN("# IK failed for this pose; servos not moved.");
+      return false;
+    }
+  }
+#endif
 
-  if (!allOk) {
+  // Save what was actually applied to IK (after saturation)
+  gLastAppliedRoll = rollDeg;
+  gLastAppliedPitch = pitchDeg;
+  gLastAppliedYaw = yawDeg;
+
+  // If any leg failed, don't move servos.
+  if (gLastIkOkMask != 0x3F) {
     SLOG_PRINTLN("# IK failed for this pose; servos not moved.");
     return false;
   }
@@ -513,7 +1004,7 @@ bool applyPoseIK(float x, float y, float z,
   // Drive servos: model 0° corresponds to 90° command.
   SLOG_PRINT("# IK angles (deg):");
   for (int i = 0; i < NUM_SERVOS; ++i) {
-    int cmd = clampDeg((int)roundf(90.0f + angles[i]));
+    int cmd = clampDeg((int)roundf(SERVO_CENTER_DEG[i] + SERVO_SIGN[i] * angles[i]));
     servos[i].write(cmd);
     SLOG_PRINT(' ');
     SLOG_PRINT2(angles[i], 2);
@@ -564,7 +1055,7 @@ void demoCircularMotion() {
     // Drive servos: assume model 0° corresponds to 90° command.
     for (int i = 0; i < NUM_SERVOS; ++i) {
       if (!ok[i]) continue; // skip on failure to avoid wild motion
-      int cmd = clampDeg((int)roundf(90.0f + angles[i]));
+      int cmd = clampDeg((int)roundf(SERVO_CENTER_DEG[i] + SERVO_SIGN[i] * angles[i]));
       servos[i].write(cmd);
     }
 
@@ -596,7 +1087,7 @@ void handleSerial() {
   }
 
   if (line.equalsIgnoreCase("CENTER")) {
-    for (uint8_t i = 0; i < NUM_SERVOS; i++) servos[i].write(90);
+    for (uint8_t i = 0; i < NUM_SERVOS; i++) servos[i].write((int)roundf(SERVO_CENTER_DEG[i]));
     SLOG_PRINTLN("# centered to 90");
     return;
   }
@@ -638,10 +1129,16 @@ static constexpr size_t RX_LINE_MAX = 160;
 static char rxLine[RX_LINE_MAX];
 static size_t rxLen = 0;
 
-static void processLine(const char *cstrLine) {
+static void processLine(const char *cstrLine, uint32_t rxUs) {
   String line(cstrLine);
   line.trim();
   if (line.length() == 0) return;
+
+#if 1
+  // Uppercase copy for command matching (keeps original `line` for sscanf parsing).
+  String u = line;
+  u.toUpperCase();
+#endif
 
 #if STEWART_WIFI_DEBUG
   dbgLastRxMs = millis();
@@ -650,16 +1147,92 @@ static void processLine(const char *cstrLine) {
 #endif
 
   // Text commands: DEMO / DEMO CENTER / CENTER
-  if (line.equalsIgnoreCase("DEMO") || line.equalsIgnoreCase("DEMO CENTER")) {
+  if (u == "DEMO" || u == "DEMO CENTER") {
     SLOG_PRINTLN("# Starting circular IK demo...");
     demoCircularMotion();
     SLOG_PRINTLN("# Demo done.");
     return;
   }
 
-  if (line.equalsIgnoreCase("CENTER")) {
-    for (uint8_t i = 0; i < NUM_SERVOS; i++) servos[i].write(90);
-    SLOG_PRINTLN("# centered to 90");
+  if (u == "CENTER") {
+    for (uint8_t i = 0; i < NUM_SERVOS; i++) servos[i].write(clampDeg((int)roundf(SERVO_CENTER_DEG[i])));
+    SLOG_PRINTLN("# centered to SERVO_CENTER_DEG[]");
+    return;
+  }
+
+  // Calibration helpers:
+  //   SET i deg     -> set servo i (1..6) to absolute write(deg) position
+  //   ALL deg       -> set all servos to absolute write(deg)
+  //   MODEL i a_deg -> set servo i to SERVO_CENTER_DEG[i] + SERVO_SIGN[i] * a_deg (model angle)
+  //   SWEEP i [start end step delay_ms] -> sweep servo i through a range (absolute degrees)
+  if (u.startsWith("SET ")) {
+    int idx1 = 0;
+    float deg = 0.0f;
+    if (sscanf(line.c_str(), "SET %d %f", &idx1, &deg) == 2 && idx1 >= 1 && idx1 <= (int)NUM_SERVOS) {
+      int cmd = clampDeg((int)roundf(deg));
+      servos[idx1 - 1].write(cmd);
+      SLOG_PRINTF("# SET servo %d -> %d deg\n", idx1, cmd);
+      return;
+    }
+    SLOG_PRINTLN("# Usage: SET i deg   (i=1..6, deg=0..180)");
+    return;
+  }
+
+  if (u.startsWith("ALL ")) {
+    float deg = 0.0f;
+    if (sscanf(line.c_str(), "ALL %f", &deg) == 1) {
+      int cmd = clampDeg((int)roundf(deg));
+      for (uint8_t i = 0; i < NUM_SERVOS; i++) servos[i].write(cmd);
+      SLOG_PRINTF("# ALL -> %d deg\n", cmd);
+      return;
+    }
+    SLOG_PRINTLN("# Usage: ALL deg   (deg=0..180)");
+    return;
+  }
+
+  if (u.startsWith("MODEL ")) {
+    int idx1 = 0;
+    float aDeg = 0.0f;
+    if (sscanf(line.c_str(), "MODEL %d %f", &idx1, &aDeg) == 2 && idx1 >= 1 && idx1 <= (int)NUM_SERVOS) {
+      int cmd = clampDeg((int)roundf(SERVO_CENTER_DEG[idx1 - 1] + SERVO_SIGN[idx1 - 1] * aDeg));
+      servos[idx1 - 1].write(cmd);
+      SLOG_PRINTF("# MODEL servo %d angle=%.2f -> %d deg\n", idx1, aDeg, cmd);
+      return;
+    }
+    SLOG_PRINTLN("# Usage: MODEL i angle_deg   (i=1..6, angle in model degrees)");
+    return;
+  }
+
+  if (u.startsWith("SWEEP ")) {
+    int idx1 = 0;
+    float startDeg = 30.0f;
+    float endDeg   = 150.0f;
+    float stepDeg  = 1.0f;
+    int delayMs    = 25;
+
+    int n = sscanf(line.c_str(), "SWEEP %d %f %f %f %d", &idx1, &startDeg, &endDeg, &stepDeg, &delayMs);
+    if (n >= 1 && idx1 >= 1 && idx1 <= (int)NUM_SERVOS) {
+      if (stepDeg == 0.0f) stepDeg = 1.0f;
+      // Ensure step sign matches direction.
+      if ((endDeg - startDeg) > 0 && stepDeg < 0) stepDeg = -stepDeg;
+      if ((endDeg - startDeg) < 0 && stepDeg > 0) stepDeg = -stepDeg;
+
+      SLOG_PRINTF("# SWEEP servo %d: start=%.1f end=%.1f step=%.2f delay=%dms\n",
+                  idx1, startDeg, endDeg, stepDeg, delayMs);
+
+      for (float d = startDeg; (stepDeg > 0) ? (d <= endDeg) : (d >= endDeg); d += stepDeg) {
+        int cmd = clampDeg((int)roundf(d));
+        servos[idx1 - 1].write(cmd);
+        delay((uint32_t)max(0, delayMs));
+        // Allow WiFi debug server to stay responsive during sweep.
+#if STEWART_WIFI_DEBUG
+        dbgServer.handleClient();
+#endif
+      }
+      SLOG_PRINTLN("# SWEEP done.");
+      return;
+    }
+    SLOG_PRINTLN("# Usage: SWEEP i [start end step delay_ms]   (i=1..6)");
     return;
   }
 
@@ -677,7 +1250,51 @@ static void processLine(const char *cstrLine) {
     dbgLastPose[5] = yawDeg;
 #endif
 
-    applyPoseIK(x, y, z, rollDeg, pitchDeg, yawDeg, -90.0f, 90.0f);
+    uint32_t seq = ++gPoseSeq;
+    uint32_t tApplyStart = micros();
+    // Save requested (pre-saturation) for telemetry.
+    gLastReqRoll = rollDeg;
+    gLastReqPitch = pitchDeg;
+    gLastReqYaw = yawDeg;
+    bool ikOk = applyPoseIK(x, y, z, rollDeg, pitchDeg, yawDeg, -90.0f, 90.0f);
+    uint32_t tDone = micros();
+
+#if STEWART_WIFI_DEBUG
+    // Human-readable ACK/status line (still easy to parse):
+    // ACK seq=<n> status=<OK|SAT|IK_FAIL|PARSE_FAIL|RX_OVERFLOW> flags=<TOKENS>
+    //     rx_us=<t> done_us=<t> dt_us=<t> ik_mask=0xXX sat=<0|1> lim=<deg> mag=<in>-><out>
+    //     req=<x,y,z,r,p,y> applied_rpy=<r,p,y>
+    uint32_t flags = ST_CMD_POSE | ST_PARSE_OK;
+    if (WiFi.status() == WL_CONNECTED) flags |= ST_WIFI_CONNECTED;
+    if (gLastSatApplied) flags |= ST_SAT_APPLIED;
+    if (gLastZClamped) flags |= ST_Z_CLAMPED;
+    if (ikOk) flags |= ST_IK_OK;
+    else flags |= ST_IK_FAIL;
+
+    char toks[80];
+    flagsToTokens(flags, toks, sizeof(toks));
+
+    char buf[300];
+    snprintf(
+      buf, sizeof(buf),
+      "ACK seq=%lu status=%s flags=%s rx_us=%lu done_us=%lu dt_us=%lu ik_mask=0x%02X sat=%d lim=%.3f mag=%.3f->%.3f req=%.3f,%.3f,%.3f,%.3f,%.3f,%.3f applied_rpy=%.3f,%.3f,%.3f",
+      (unsigned long)seq,
+      statusWordFrom(flags),
+      toks,
+      (unsigned long)rxUs,
+      (unsigned long)tDone,
+      (unsigned long)(tDone - rxUs),
+      (unsigned)gLastIkOkMask,
+      gLastSatApplied ? 1 : 0,
+      (double)gLastSatLimitDeg,
+      (double)gLastSatMagInDeg,
+      (double)gLastSatMagOutDeg,
+      (double)x, (double)y, (double)z,
+      (double)gLastReqRoll, (double)gLastReqPitch, (double)gLastReqYaw,
+      (double)gLastAppliedRoll, (double)gLastAppliedPitch, (double)gLastAppliedYaw
+    );
+    emitStatusLine(buf);
+#endif
     return;
   }
 
@@ -698,7 +1315,8 @@ static void serialPollLines() {
 
     if (c == '\n') {
       rxLine[rxLen] = '\0';
-      processLine(rxLine);
+      uint32_t rxUs = micros();
+      processLine(rxLine, rxUs);
       rxLen = 0;
       continue;
     }
@@ -708,6 +1326,23 @@ static void serialPollLines() {
     } else {
       // Overflow: drop the line to resync on next newline.
       rxLen = 0;
+#if STEWART_WIFI_DEBUG
+      uint32_t flags = ST_PARSE_FAIL | ST_RX_OVERFLOW;
+      if (WiFi.status() == WL_CONNECTED) flags |= ST_WIFI_CONNECTED;
+      uint32_t now = micros();
+      char toks[80];
+      flagsToTokens(flags, toks, sizeof(toks));
+      char buf[220];
+      snprintf(
+        buf, sizeof(buf),
+        "ACK seq=0 status=%s flags=%s rx_us=%lu done_us=%lu dt_us=0 ik_mask=0x00 sat=0 lim=0 mag=0->0 req=0,0,0,0,0,0 applied_rpy=0,0,0",
+        statusWordFrom(flags),
+        toks,
+        (unsigned long)now,
+        (unsigned long)now
+      );
+      emitStatusLine(buf);
+#endif
     }
   }
 }
@@ -737,6 +1372,7 @@ void setup() {
 #if STEWART_WIFI_DEBUG
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+  dbgUdp.begin(STATUS_UDP_PORT); // also fine when sending broadcast; enables stack
   dbgServer.on("/", HTTP_GET, dbgHandleRoot);
   dbgServer.on("/data", HTTP_GET, dbgHandleData);
   dbgServer.on("/clear", HTTP_POST, dbgHandleClear);
