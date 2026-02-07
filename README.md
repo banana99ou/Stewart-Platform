@@ -40,10 +40,7 @@ A **single Simulink model** integrates:
 ### 2.3 Stewart Platform (RC-servo actuators)
 - Executes commanded pose within mechanical/servo constraints
 - **Current hardware has no encoder/pose feedback** (RC airplane grade servos).
-- (LOW priority TODO) add lightweight **status flags**:
-  - command clamp / saturation indicator
-  - “near limit” indicator
-  - watchdog / update timeout indicator
+- Low priority future work (status flags like clamp/near-limit/watchdog) is tracked in `ToDo.md`.
 
 ### 2.4 Flight Controller: Pix32 v6 with PX4
 - Mounted on platform
@@ -124,8 +121,8 @@ Implementation note (two feasible approaches):
 - `f_xplane`: X-Plane update/output rate
 - `f_mav`: MAVLink message/actuator output rate
 
-### 7.2 Latency measurement TODO (must-do for conference)
-Measure and plot delay across each layer:
+### 7.2 Latency measurement plan (must-do for conference)
+Implementation status + any refinements are tracked in `ToDo.md`. Measurement targets:
 - X-Plane → Simulink input latency
 - Simulink compute latency
 - Simulink → Stewart command latency
@@ -144,40 +141,28 @@ Deliverables:
 - Stewart platform ↔ Simulink ↔ X-Plane integration is working.
 
 ### 8.2 Not yet implemented / missing artifacts
-- PX4 ↔ Simulink MAVLink USB interface (actuator + attitude + status)
-- Full closed-loop: PX4 actuator outputs → Simulink → X-Plane controls
-- Plotting + analysis:
-  - attitude error plots (X-Plane vs PX4 estimate)
-  - latency plots (per-layer and end-to-end)
-- Validation tests:
-  - actuation range documentation (roll/pitch/yaw) + limit handling
-  - IK accuracy test methodology/results (proxy via PX4 IMU since no encoders)
-- New feature:
-  - rotation axis / center-of-rotation offset functionality
+This section easily goes stale; the canonical, up-to-date status and remaining work live in `ToDo.md`.
 
 ---
 
-## 9) TODOs
-### 9.1 Platform actuation range (HIGH)
-- measure roll/pitch/yaw limits (deg), safe envelope
-- document behavior when demand exceeds range (clamp + log)
+## 9) TODOs / Task tracking
+The canonical TODO list (with priorities + completion status) is maintained in `ToDo.md`.
 
-### 9.2 Pixhawk/PX4 interface layer (HIGH)
-- MAVLink parsing in Simulink:
-  - actuator outputs (primary)
-  - attitude estimate (recommended)
-  - arming/mode/status (recommended)
+---
 
-### 9.3 Error & latency plotting (HIGH)
-- auto-generate:
-  - attitude vs time, angular rates vs time
-  - tracking error time series + stats
-  - latency plots + stats
+## Tracking error tester (PX4 + Stewart, yaw-zeroed)
 
-### 9.4 IK accuracy test (MEDIUM)
-- static pose holds at multiple setpoints
-- evaluate achieved pose proxy using PX4 IMU
-- quantify repeatability/hysteresis
+If you want to test for Euler coupling (e.g. “pitch doesn’t look like pitch when yaw is high”), use:
+
+```bash
+python tracking_error_tester.py --stewart-com COM13 --px4-com COM9
+```
+
+What it does:
+- Connects to PX4 MAVLink `ATTITUDE`
+- Captures the first PX4 yaw as **yaw0**, then logs **yaw_rel = wrap(yaw - yaw0)**
+- Commands roll/pitch steps at multiple yaw angles
+- Writes `summary.csv` + raw samples under `logs/run-*/`
 
 ### 9.5 Rotation-axis offset (MEDIUM)
 - implement configurable rotation center offset in kinematic mapping
@@ -205,3 +190,8 @@ Deliverables:
    - angles + angular rates plots
    - tracking error + latency plots + limitations discussion
 4. Platform range documented; saturation behavior shown
+
+# narrative
+Claim 1 (integration): “We built a physically closed-loop HILS where simulator dynamics drive real motion, a real FC/IMU responds, and its outputs affect the simulator again.”
+Claim 2 (fidelity): “Within the platform’s feasible workspace, the physical motion tracks the simulator command with quantifiable error, and we can explain the error by latency, saturation, and actuator limits.”
+Claim 3 (usefulness): “This testbed is useful for (i) pre-flight validation, (ii) education/demo, and (iii) extending to other aerospace vehicles (space/reentry) because the loop structure + evaluation method generalize.”
