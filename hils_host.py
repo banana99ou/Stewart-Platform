@@ -79,6 +79,35 @@ def sleep_until_ns(t_target_ns: int) -> None:
             return
 
 
+# ---------------- Angle helpers ----------------
+
+def wrap180(deg: float) -> float:
+    """
+    Wrap degrees into [-180, 180).
+    """
+    x = (float(deg) + 180.0) % 360.0 - 180.0
+    return 180.0 if x == -180.0 else x
+
+
+def unwrap_deg(prev_unwrapped: Optional[float], new_wrapped_deg: float) -> float:
+    """
+    Unwrap a wrapped angle (typically in [-180,180)) into a continuous signal.
+    """
+    nw = float(new_wrapped_deg)
+    if prev_unwrapped is None:
+        return nw
+    # delta in [-180,180)
+    delta = wrap180(nw - wrap180(prev_unwrapped))
+    return float(prev_unwrapped + delta)
+
+
+def angle_error_deg(setpoint_deg: float, meas_deg: float) -> float:
+    """
+    Smallest signed angle error (deg) in [-180, 180).
+    """
+    return wrap180(float(setpoint_deg) - float(meas_deg))
+
+
 # ---------------- PID ----------------
 
 class PID:
@@ -116,6 +145,34 @@ class PID:
         u = max(-self.out_limit, min(u, self.out_limit))
         return float(u)
 
+    def update_angle(self, setpoint_deg: float, meas_deg: float, dt_s: float) -> float:
+        """
+        PID for angular signals (wraps error into [-180,180) to avoid discontinuities).
+        """
+        if not (0.0 < dt_s < 10.0):
+            dt_s = 0.0
+        err = angle_error_deg(setpoint_deg, meas_deg)
+
+        # integral
+        self.i += err * dt_s
+        self.i = max(-self.i_limit, min(self.i, self.i_limit))
+
+        # derivative
+        d = 0.0
+        if self.has_prev and dt_s > 0:
+            d = (err - self.prev_err) / dt_s
+        self.prev_err = err
+        self.has_prev = True
+
+        u = self.kp * err + self.ki * self.i + self.kd * d
+        u = max(-self.out_limit, min(u, self.out_limit))
+        return float(u)
+
+    def reset(self) -> None:
+        self.i = 0.0
+        self.prev_err = 0.0
+        self.has_prev = False
+
 
 # ---------------- ESP32 Stewart serial ----------------
 
@@ -132,7 +189,7 @@ def normalize_serial_port(port: str) -> str:
     return p
 
 
-ACK_RE = re.compile(
+ACK_RE_FULL = re.compile(
     r"^ACK\s+seq=(?P<seq>\d+)\s+status=(?P<status>\S+)\s+flags=(?P<flags>\S+)\s+"
     r"rx_us=(?P<rx_us>\d+)\s+done_us=(?P<done_us>\d+)\s+dt_us=(?P<dt_us>\d+)\s+"
     r"ik_mask=0x(?P<ik_mask>[0-9A-Fa-f]{2})\s+sat=(?P<sat>[01])\s+"
@@ -140,23 +197,29 @@ ACK_RE = re.compile(
     r"a=(?P<a>[-+0-9\.]+)"
 )
 
+# Minimal ACK emitted by firmware (recommended for 100 Hz operation):
+#   ACK seq=<n> rx_us=<t> done_us=<t> sat=<0|1> ik=<XX>
+ACK_RE_MIN = re.compile(
+    r"^ACK\s+seq=(?P<seq>\d+)\s+rx_us=(?P<rx_us>\d+)\s+done_us=(?P<done_us>\d+)\s+sat=(?P<sat>[01])\s+ik=(?P<ik>[0-9A-Fa-f]{2})$"
+)
+
 
 @dataclass
 class StewartAck:
     t_rx_ns: int
     seq: int
-    status: str
-    flags: str
     rx_us: int
     done_us: int
     dt_us: int
     ik_mask: int
     sat: int
-    lim_deg: float
-    mag_in_deg: float
-    mag_out_deg: float
-    alpha: float
-    raw_line: str
+    status: str = ""
+    flags: str = ""
+    lim_deg: float = float("nan")
+    mag_in_deg: float = float("nan")
+    mag_out_deg: float = float("nan")
+    alpha: float = float("nan")
+    raw_line: str = ""
 
 
 @dataclass
@@ -202,26 +265,48 @@ class StewartSerial:
         self.sent_queue.append(cmd)
 
     def _parse_line(self, line: str, t_rx_ns: int) -> Optional[StewartAck]:
-        m = ACK_RE.match(line.strip())
-        if not m:
-            return None
-        gd = m.groupdict()
-        return StewartAck(
-            t_rx_ns=t_rx_ns,
-            seq=int(gd["seq"]),
-            status=str(gd["status"]),
-            flags=str(gd["flags"]),
-            rx_us=int(gd["rx_us"]),
-            done_us=int(gd["done_us"]),
-            dt_us=int(gd["dt_us"]),
-            ik_mask=int(gd["ik_mask"], 16),
-            sat=int(gd["sat"]),
-            lim_deg=float(gd["lim"]),
-            mag_in_deg=float(gd["mag_in"]),
-            mag_out_deg=float(gd["mag_out"]),
-            alpha=float(gd["a"]),
-            raw_line=line.strip(),
-        )
+        s = line.strip()
+
+        m = ACK_RE_FULL.match(s)
+        if m:
+            gd = m.groupdict()
+            return StewartAck(
+                t_rx_ns=t_rx_ns,
+                seq=int(gd["seq"]),
+                status=str(gd["status"]),
+                flags=str(gd["flags"]),
+                rx_us=int(gd["rx_us"]),
+                done_us=int(gd["done_us"]),
+                dt_us=int(gd["dt_us"]),
+                ik_mask=int(gd["ik_mask"], 16),
+                sat=int(gd["sat"]),
+                lim_deg=float(gd["lim"]),
+                mag_in_deg=float(gd["mag_in"]),
+                mag_out_deg=float(gd["mag_out"]),
+                alpha=float(gd["a"]),
+                raw_line=s,
+            )
+
+        m = ACK_RE_MIN.match(s)
+        if m:
+            gd = m.groupdict()
+            rx_us = int(gd["rx_us"])
+            done_us = int(gd["done_us"])
+            dt_us = max(0, done_us - rx_us)
+            return StewartAck(
+                t_rx_ns=t_rx_ns,
+                seq=int(gd["seq"]),
+                status="MIN",
+                flags="",
+                rx_us=rx_us,
+                done_us=done_us,
+                dt_us=dt_us,
+                ik_mask=int(gd["ik"], 16),
+                sat=int(gd["sat"]),
+                raw_line=s,
+            )
+
+        return None
 
     def poll_acks(self) -> list[Tuple[StewartAck, Optional[PoseCmd]]]:
         """
@@ -573,6 +658,7 @@ class XPlaneSender:
         # DO NOT insert an extra record for '48' — it's a header byte, not a DATA group index.
         pkt = self.data_hdr + g8 + g25
         self.sock.sendto(pkt, self.target)
+        logging.warning("Sent controls: elevator: %s, aileron: %s, rudder: %s, throttle: %s", ele, ail, rud, thr)
         if self._dump_remaining > 0:
             print(f"[xplane_tx] target={self.target} header={self.data_hdr!r} len={len(pkt)} hex={pkt.hex()}")
             self._dump_remaining -= 1
@@ -663,6 +749,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stewart-baud", type=int, default=115200, help="ESP32 serial baud.")
     p.add_argument("--stewart-open-delay-s", type=float, default=1.5, help="Delay after opening ESP32 serial (handles auto-reset).")
     p.add_argument("--pose-z-mm", type=float, default=20.0, help="Default Z translation (mm) for pose commands.")
+    p.add_argument("--pose-start-hold-s", type=float, default=0.0, help="Hold zero pose (r/p/y=0) for this many seconds after start.")
+    p.add_argument("--pose-ramp-s", type=float, default=2.0, help="Ramp pose commands from zero to target over this many seconds after hold.")
+    p.add_argument(
+        "--platform-yaw-relative",
+        action="store_true",
+        help="Command platform yaw relative to initial X-Plane heading (so initial heading becomes 0 deg).",
+    )
 
     # PX4
     p.add_argument("--px4-com", default="COM13", help="PX4 serial port (MAVLink).")
@@ -672,24 +765,49 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-px4", action="store_true", help="Disable PX4/MAVLink entirely (platform-only run).")
 
     # Control tick
-    p.add_argument("--tick-hz", type=float, default=100.0, help="Host control tick (Hz).")
+    p.add_argument("--tick-hz", type=float, default=50.0, help="Host control tick (Hz).")
+
+    # Heading alignment (X-Plane heading vs PX4 yaw)
+    p.add_argument(
+        "--yaw-bias",
+        action="store_true",
+        help="Enable yaw bias/unwrap alignment between X-Plane heading (0..360) and PX4 yaw (-180..180).",
+    )
+    p.add_argument(
+        "--yaw-platform-flip",
+        action="store_true",
+        help="Flip sim heading sign when comparing to PX4 yaw (use if platform yaw convention is inverted).",
+    )
+    p.add_argument(
+        "--yaw-bias-adapt-rate",
+        type=float,
+        default=0.0,
+        help="If >0, slowly adapt yaw bias to cancel PX4 drift when yaw is 'still'. Units: 1/s (typical 0.01..0.1).",
+    )
+    p.add_argument(
+        "--yaw-still-thresh-deg-s",
+        type=float,
+        default=2.0,
+        help="Consider yaw 'still' if estimated sim yaw rate is below this (deg/s).",
+    )
 
     # PID (control surfaces)
     p.add_argument("--sp-roll-deg", type=float, default=0.0, help="Roll setpoint (deg).")
     p.add_argument("--sp-pitch-deg", type=float, default=0.0, help="Pitch setpoint (deg).")
     p.add_argument("--sp-yaw-deg", type=float, default=0.0, help="Yaw setpoint (deg).")
 
-    p.add_argument("--kp-roll", type=float, default=0.2)
+    p.add_argument("--kp-roll", type=float, default=0.0)
     p.add_argument("--ki-roll", type=float, default=0.0)
-    p.add_argument("--kd-roll", type=float, default=0.1)
+    p.add_argument("--kd-roll", type=float, default=0.0)
     p.add_argument("--kp-pitch", type=float, default=0.7)
     p.add_argument("--ki-pitch", type=float, default=0.0)
     p.add_argument("--kd-pitch", type=float, default=0.1)
-    p.add_argument("--kp-yaw", type=float, default=0.2)
+    p.add_argument("--kp-yaw", type=float, default=0.0)
     p.add_argument("--ki-yaw", type=float, default=0.0)
     p.add_argument("--kd-yaw", type=float, default=0.0)
+    p.add_argument("--pid-start-delay-s", type=float, default=3.0, help="Delay before enabling PX4->PID->X-Plane control injection (lets PX4 settle).")
 
-    p.add_argument("--i-limit", type=float, default=10.0)
+    p.add_argument("--i-limit", type=float, default=30.0)
     p.add_argument("--u-limit", type=float, default=1.0, help="Control output limit (normalized, -1..+1).")
     p.add_argument("--throttle", type=float, default=1.0, help="Injected throttle command (clamped to 0..1).")
 
@@ -759,6 +877,7 @@ def main() -> int:
     print(f"[hils_host] run_dir={run_dir}")
     print("[hils_host] Ctrl+C to stop.")
 
+    t_start_ns = monotonic_ns()
     last_tick_ns = monotonic_ns()
     next_tick_ns = last_tick_ns + tick_dt_ns
 
@@ -766,11 +885,18 @@ def main() -> int:
     tick_count = 0
     ack_total = 0
     warned_no_ack = False
+    # Yaw alignment state (continuous/unwrapped degrees)
+    yaw_sim_unw: Optional[float] = None
+    yaw_px4_unw: Optional[float] = None
+    yaw_bias_deg: Optional[float] = None  # px4 - sim (after optional platform flip)
+    last_sim_yaw_for_rate: Optional[Tuple[int, float]] = None  # (t_ns, sim_unw)
+    xp_heading0_wrapped: Optional[float] = None
 
     try:
         while True:
             sleep_until_ns(next_tick_ns)
             t_tick = monotonic_ns()
+            t_elapsed_s = (t_tick - t_start_ns) / 1e9
 
             # Poll inputs (drain buffers)
             while True:
@@ -794,9 +920,33 @@ def main() -> int:
 
             # Build pose command: by default, drive platform to match X-Plane attitude if available.
             xp = xp_rx.latest
-            roll_cmd = float(xp.roll_deg) if (xp and xp.roll_deg is not None) else 0.0
-            pitch_cmd = float(xp.pitch_deg) if (xp and xp.pitch_deg is not None) else 0.0
-            yaw_cmd = float(xp.heading_deg) if (xp and xp.heading_deg is not None) else 0.0
+            roll_target = float(xp.roll_deg) if (xp and xp.roll_deg is not None) else 0.0
+            pitch_target = float(xp.pitch_deg) if (xp and xp.pitch_deg is not None) else 0.0
+            yaw_target = float(xp.heading_deg) if (xp and xp.heading_deg is not None) else 0.0
+
+            # If requested, make platform yaw relative to the initial sim heading (so startup heading becomes yaw=0).
+            if bool(args.platform_yaw_relative) and xp and xp.heading_deg is not None:
+                h0 = xp_heading0_wrapped
+                if h0 is None:
+                    h0 = wrap180(float(xp.heading_deg))
+                    xp_heading0_wrapped = h0
+                    logging.info("Platform yaw-relative init: xp_heading0_wrapped=%.2f", h0)
+                yaw_target = wrap180(wrap180(float(xp.heading_deg)) - float(h0))
+
+            # Startup shaping: optional hold + ramp to avoid initial jerk.
+            hold_s = max(0.0, float(args.pose_start_hold_s))
+            ramp_s = max(0.0, float(args.pose_ramp_s))
+            if t_elapsed_s < hold_s:
+                a = 0.0
+            elif ramp_s <= 0.0:
+                a = 1.0
+            else:
+                a = min(1.0, max(0.0, (t_elapsed_s - hold_s) / ramp_s))
+
+            roll_cmd = float(roll_target) * a
+            pitch_cmd = float(pitch_target) * a
+            # yaw can be large (heading). Keep ramp in wrapped space to avoid 0..360 weirdness.
+            yaw_cmd = wrap180(float(yaw_target)) * a
 
             pose = PoseCmd(
                 t_send_ns=t_tick,
@@ -829,11 +979,70 @@ def main() -> int:
             else:
                 dt_s = 0.0
 
-            if px is not None and pid_roll is not None and pid_pitch is not None and pid_yaw is not None:
+            # Yaw bias/unwrap alignment (for logging + yaw PID)
+            yaw_bias_active = bool(args.yaw_bias)
+            sim_yaw_wrapped = None
+            px4_yaw_wrapped = None
+            px4_yaw_aligned_to_sim = None
+            sim_yaw_aligned_to_px4 = None
+            yaw_rate_sim = None
+
+            xp_for_yaw = xp_rx.latest
+            if yaw_bias_active and xp_for_yaw is not None and xp_for_yaw.heading_deg is not None and px is not None:
+                sim_y = wrap180(float(xp_for_yaw.heading_deg))
+                if bool(args.yaw_platform_flip):
+                    sim_y = wrap180(-sim_y)
+                px_y = wrap180(float(px.yaw_deg))
+
+                yaw_sim_unw = unwrap_deg(yaw_sim_unw, sim_y)
+                yaw_px4_unw = unwrap_deg(yaw_px4_unw, px_y)
+                sim_yaw_wrapped = sim_y
+                px4_yaw_wrapped = px_y
+
+                if yaw_bias_deg is None:
+                    yaw_bias_deg = float(yaw_px4_unw - yaw_sim_unw)
+                    logging.info(
+                        "Yaw bias init: sim=%.2f px4=%.2f bias(px4-sim)=%.2f (platform_flip=%s)",
+                        yaw_sim_unw,
+                        yaw_px4_unw,
+                        yaw_bias_deg,
+                        bool(args.yaw_platform_flip),
+                    )
+
+                # Optional drift cancellation: adapt bias when sim yaw is effectively still.
+                adapt_rate = float(args.yaw_bias_adapt_rate)
+                if adapt_rate > 0.0:
+                    if last_sim_yaw_for_rate is not None:
+                        t0, y0 = last_sim_yaw_for_rate
+                        dt_rate = max(1e-6, (t_tick - t0) / 1e9)
+                        yaw_rate_sim = float((yaw_sim_unw - y0) / dt_rate)
+                    last_sim_yaw_for_rate = (t_tick, yaw_sim_unw)
+
+                    if yaw_rate_sim is not None and abs(yaw_rate_sim) < float(args.yaw_still_thresh_deg_s):
+                        # Error in wrapped space so wrap crossing doesn't create huge steps.
+                        err = wrap180((yaw_px4_unw - yaw_sim_unw) - float(yaw_bias_deg))
+                        dt_tick = float(tick_dt_ns) / 1e9
+                        yaw_bias_deg = float(yaw_bias_deg + err * adapt_rate * dt_tick)
+
+                px4_yaw_aligned_to_sim = wrap180(float(yaw_px4_unw - float(yaw_bias_deg)))
+                sim_yaw_aligned_to_px4 = wrap180(float(yaw_sim_unw + float(yaw_bias_deg)))
+
+            pid_enabled = (t_elapsed_s >= float(args.pid_start_delay_s))
+            if (not pid_enabled) and (pid_roll is not None or pid_pitch is not None or pid_yaw is not None):
+                # Prevent integral windup / noisy derivative during startup jostle.
+                if pid_roll is not None:
+                    pid_roll.reset()
+                if pid_pitch is not None:
+                    pid_pitch.reset()
+                if pid_yaw is not None:
+                    pid_yaw.reset()
+
+            if pid_enabled and px is not None and pid_roll is not None and pid_pitch is not None and pid_yaw is not None:
                 last_px4_ns = px.t_rx_ns
                 u_ail = pid_roll.update(float(args.sp_roll_deg), px.roll_deg, dt_s)
                 u_ele = pid_pitch.update(float(args.sp_pitch_deg), px.pitch_deg, dt_s)
-                u_rud = pid_yaw.update(float(args.sp_yaw_deg), px.yaw_deg, dt_s)
+                yaw_meas = px4_yaw_aligned_to_sim if (yaw_bias_active and px4_yaw_aligned_to_sim is not None) else float(px.yaw_deg)
+                u_rud = pid_yaw.update_angle(float(args.sp_yaw_deg), float(yaw_meas), dt_s)
             else:
                 u_ail = u_ele = u_rud = 0.0
 
@@ -845,6 +1054,8 @@ def main() -> int:
             row = {
                 "t_tick_ns": t_tick,
                 "tick_idx": tick_count,
+                "t_elapsed_s": t_elapsed_s,
+                "pid_enabled": int(pid_enabled),
                 "xp_t_rx_ns": xp.t_rx_ns if xp else "",
                 "xp_roll_deg": xp.roll_deg if xp else "",
                 "xp_pitch_deg": xp.pitch_deg if xp else "",
@@ -854,6 +1065,13 @@ def main() -> int:
                 "px4_roll_deg": px.roll_deg if px else "",
                 "px4_pitch_deg": px.pitch_deg if px else "",
                 "px4_yaw_deg": px.yaw_deg if px else "",
+                "yaw_bias_deg": yaw_bias_deg if yaw_bias_deg is not None else "",
+                "xp_heading0_wrapped_deg": xp_heading0_wrapped if xp_heading0_wrapped is not None else "",
+                "xp_heading_wrapped_deg": sim_yaw_wrapped if sim_yaw_wrapped is not None else "",
+                "px4_yaw_wrapped_deg": px4_yaw_wrapped if px4_yaw_wrapped is not None else "",
+                "px4_yaw_aligned_to_sim_deg": px4_yaw_aligned_to_sim if px4_yaw_aligned_to_sim is not None else "",
+                "sim_yaw_aligned_to_px4_deg": sim_yaw_aligned_to_px4 if sim_yaw_aligned_to_px4 is not None else "",
+                "sim_yaw_rate_deg_s": yaw_rate_sim if yaw_rate_sim is not None else "",
                 "cmd_roll_deg": pose.roll_deg,
                 "cmd_pitch_deg": pose.pitch_deg,
                 "cmd_yaw_deg": pose.yaw_deg,
