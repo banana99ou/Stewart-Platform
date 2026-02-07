@@ -1,12 +1,51 @@
-from msilib import datasizemask
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (needed for 3D)
+"""
+coordinate_generator.py
+
+This module provides geometric helper functions and constants for the Stewart platform 
+(6-DOF parallel manipulator), specifically tailored for physical HILS (Hardware-in-the-Loop Simulation) platforms controlled via serial/UDP interfaces. 
+
+What is this code?
+------------------
+This code defines coordinate transformations (rotations about axes, translations, mirroring), 
+maintains geometric constants (such as link lengths), and provides the backbone for kinematic calculations and range analysis for a Stewart platform.
+
+What does it do?
+----------------
+- Defines geometric constants and helper functions for point manipulations in 3D (rotation about X/Y/Z, translation, mirroring).
+- Maintains consistency with real firmware geometry for hardware-in-the-loop simulations.
+- Optionally includes 3D plotting/animation capabilities if matplotlib is available.
+- Serves as a utility for higher-level scripts (such as actuation range calculators, motion planners, and visualization tools) to generate and analyze platform coordinates and kinematics.
+
+How to run it
+-------------
+This file itself does not contain a main entry point or CLI.
+Typical usage is to **import its functions** into other project modules, for example:
+
+    import coordinate_generator as cg
+    point = cg.rotate_z([10, 0, 0], 90)  # Rotate 90 degrees about Z axis
+    moved = cg.translate(point, 5, 0, 0) # Translate by (5, 0, 0)
+
+For plotting/animation, ensure `matplotlib` is installed.
+If only kinematics and geometry are needed, no extra dependencies are required beyond NumPy.
+
+This module is self-contained and does not execute any code on direct run.
+"""
+
+# Matplotlib is only needed for plotting/animation. Keep it optional so that
+# headless / minimal environments can still run IK and range calculations.
+try:
+  import matplotlib.pyplot as plt
+  from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (needed for 3D)
+except Exception:
+  plt = None
 
 DEG2RAD = np.pi / 180.0
 
 # Geometry constants
-LINK_LENGTH = 162.21128  # mm (ball link center to center)
+# Keep these consistent with the real firmware geometry in `main/main.ino`.
+# LINK_LENGTH is ball-link center to center (mm).
+LINK_LENGTH = 127.0
 
 def rotate_z(p, deg):
   """Rotate point about Z axis (Yaw)"""
@@ -98,8 +137,8 @@ def build_servo_frame(axis):
 
 # Base geometry for servo 1
 B1 = np.array([-50.0, 100.0, 10.0])
-H1 = np.array([-85.0, 108.0 + 3.3 / 2.0, 10.0])
-U1 = np.array([-7.5, 108.0 + 3.3 / 2.0, 152.5])
+H1 = np.array([-97.5, 108.0 + 3.3 / 2.0, 10.0])
+U1 = np.array([-7.5, 108.0 + 3.3 / 2.0, 99.60469])
 
 def generate_coordinates():
   bottom = np.zeros((6, 3))
@@ -204,7 +243,10 @@ def transform_upper_anchors(upper_original, dz=0.0, roll_deg=0.0, pitch_deg=0.0,
   """
   Transform upper anchors by translation and rotation.
   Rotations are applied about the center of the upper plate.
-  Order: Translate to origin, Roll (X-axis), Pitch (Y-axis), Yaw (Z-axis),
+  Convention (right-hand rule, Z up):
+    - pitch: rotation about +X
+    - roll : rotation about +Y
+  Order: Translate to origin, Pitch (X-axis), Roll (Y-axis), Yaw (Z-axis),
   translate back, then global translation (dx, dy, dz).
   """
   upper = upper_original.copy()
@@ -215,13 +257,13 @@ def transform_upper_anchors(upper_original, dz=0.0, roll_deg=0.0, pitch_deg=0.0,
   # Translate to origin for rotation
   upper_centered = upper - center
   
-  # Apply Roll (rotation about X axis)
-  if roll_deg != 0.0:
-    upper_centered = np.array([rotate_x(p, roll_deg) for p in upper_centered])
-  
-  # Apply Pitch (rotation about Y axis)
+  # Apply Pitch (rotation about X axis)
   if pitch_deg != 0.0:
-    upper_centered = np.array([rotate_y(p, pitch_deg) for p in upper_centered])
+    upper_centered = np.array([rotate_x(p, pitch_deg) for p in upper_centered])
+  
+  # Apply Roll (rotation about Y axis)
+  if roll_deg != 0.0:
+    upper_centered = np.array([rotate_y(p, roll_deg) for p in upper_centered])
   
   # Apply Yaw (rotation about Z axis)
   if yaw_deg != 0.0:
@@ -390,6 +432,8 @@ def plot_single_platform(ax, bottom, horn, upper, title, show_angles=None):
 
 def plot_platform(bottom, horn, upper):
   """Original single plot function (for backward compatibility)"""
+  if plt is None:
+    raise RuntimeError("matplotlib is required for plotting. Install it (e.g. `pip install matplotlib`).")
   fig = plt.figure()
   ax = fig.add_subplot(111, projection='3d')
   plot_single_platform(ax, bottom, horn, upper, "Stewart Platform Servo & Link Geometry")
@@ -420,10 +464,10 @@ def simulate_circular_motion(bottom, horn_0deg, upper_original,
     # in the XY plane (i.e. -normal points toward the origin), using only
     # roll and pitch (no yaw).
     if align_normal_to_origin and (abs(dx) > 1e-9 or abs(dy) > 1e-9):
-      # For small angles, n_xy ≈ (pitch, -roll). To align n_xy with (dx, dy),
-      # choose roll, pitch proportional to dy and dx respectively.
-      roll_step = -tilt_deg * (dy / radius_mm)
-      pitch_step = tilt_deg * (dx / radius_mm)
+      # For small angles with our convention, n_xy ≈ (roll, -pitch).
+      # To align n_xy with (dx, dy), choose roll ∝ dx and pitch ∝ -dy.
+      roll_step = tilt_deg * (dx / radius_mm)
+      pitch_step = -tilt_deg * (dy / radius_mm)
       roll_cmd = roll_deg + roll_step
       pitch_cmd = pitch_deg + pitch_step
     else:
@@ -458,6 +502,8 @@ def animate_circular_motion(bottom, horn_0deg, upper_original,
   Animate the platform following a horizontal circular motion in XY.
   Close the matplotlib window or interrupt the script to stop the animation.
   """
+  if plt is None:
+    raise RuntimeError("matplotlib is required for animation. Install it (e.g. `pip install matplotlib`).")
   samples = simulate_circular_motion(
     bottom, horn_0deg, upper_original,
     radius_mm=radius_mm,
