@@ -2,3 +2,4 @@
 .venv
 slprj
 __pycache__
+logs/
