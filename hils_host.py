@@ -21,30 +21,6 @@ Notes / current constraints:
   - Transmitting "DATA\\0" packets back to X-Plane (UDP TX: 127.0.0.1:49001) with:
       - group 8  : control surfaces (elevator/aileron/rudder; others = -999)
       - group 25 : throttle (others = -999)
-
-Examples on how to run this code:
----------------------------------
-
-# Typical run (with X-Plane, PX4, Stewart platform serial on COM13):
-
-    python hils_host.py --xplane-recv-port 49004 --xplane-send-port 49001 --stewart-com COM13 --px4-port COM5
-
-# Minimal "platform-only" run (no PX4, no X-Plane injection):
-
-    python hils_host.py --no-px4 --xplane-send none --stewart-com COM13
-
-# Disable X-Plane receive, log only PX4 and Stewart:
-
-    python hils_host.py --no-xplane --stewart-com COM13 --px4-port COM5
-
-# Custom X-Plane IP/ports (e.g., for remote X-Plane instance):
-
-    python hils_host.py --xplane-ip 192.168.1.50 --xplane-recv-port 49010 --xplane-send-port 49012 --stewart-com COM13
-
-# See all options and help:
-
-    python hils_host.py --help
-
 """
 
 # Quick start (typical ports used by the Simulink model):
@@ -221,7 +197,7 @@ class StewartSerial:
 
     def send_pose(self, cmd: PoseCmd) -> None:
         line = f"{cmd.x_mm:.3f} {cmd.y_mm:.3f} {cmd.z_mm:.3f} {cmd.roll_deg:.3f} {cmd.pitch_deg:.3f} {-1*cmd.yaw_deg:.3f}\n"
-        # print("sending pose: %s", line)
+        logging.debug("sending pose: %s", line)
         self.ser.write(line.encode("ascii", errors="ignore"))
         self.sent_queue.append(cmd)
 
@@ -405,7 +381,23 @@ class XPlaneReceiver:
     def __init__(self, listen_host: str, listen_port: int):
         self.addr = (listen_host, int(listen_port))
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(self.addr)
+        # On Windows, X-Plane may bind its own UDP source port (e.g. "Port we send from").
+        # If that equals our listen port, the bind will fail with WinError 10048.
+        # SO_REUSEADDR improves behavior on some platforms, but the correct fix is to
+        # set X-Plane "Port we send from" to something else, and "Port we send to"
+        # to our --xplane-rx-port.
+        try:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        except Exception:
+            pass
+        try:
+            self.sock.bind(self.addr)
+        except OSError as e:
+            raise OSError(
+                f"Failed to bind X-Plane RX UDP socket on {self.addr}. "
+                f"If X-Plane is set to 'Port we send from' = {self.addr[1]}, change that to a different port "
+                f"(e.g. 49005) and keep 'Port we send to' = {self.addr[1]}."
+            ) from e
         self.sock.setblocking(False)
         self.latest: Optional[XPlaneState] = None
         self._warn_every_n = 200  # rate-limit noisy warnings
@@ -419,7 +411,7 @@ class XPlaneReceiver:
 
     def poll(self) -> Optional[XPlaneState]:
         try:
-            data, _src = self.sock.recvfrom(4096)
+            data, _src = self.sock.recvfrom(8192)
         except BlockingIOError:
             return None
         t_rx = monotonic_ns()
@@ -506,16 +498,35 @@ class XPlaneSender:
       - group 25 : throttle (others = -999)
     """
 
-    DATA_HDR = b"DATA\x00"
+    # Header nuance:
+    # - X-Plane documentation commonly shows "DATA\\0" (null terminator) => b"DATA\\x00" (5 bytes).
+    # - The Simulink model in this repo uses the literal ASCII '0' (48) as the 5th byte => b"DATA0".
+    # - Some setups use just "DATA" (4 bytes).
+    #
+    # Make this configurable for byte-for-byte parity with existing toolchains.
+    DATA_HDR_NULL = b"DATA\x00"
+    DATA_HDR_ASCII0 = b"DATA0"
+    DATA_HDR_4 = b"DATA"
     GROUP = struct.Struct("<i8f")  # index(int32) + 8 float32
 
     DREF_HDR = b"DREF\x00"
     DREF = struct.Struct("<f")  # single float32
 
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, header_mode: str = "data0"):
         self.target = (host, int(port))
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._last_override_s = 0.0
+        self._dump_remaining = 0
+
+        hm = (header_mode or "").strip().lower()
+        if hm in ("data0", "ascii0", "data_ascii0"):
+            self.data_hdr = self.DATA_HDR_ASCII0
+        elif hm in ("null", "data_null", "data\\0", "data\0"):
+            self.data_hdr = self.DATA_HDR_NULL
+        elif hm in ("data", "data4", "4"):
+            self.data_hdr = self.DATA_HDR_4
+        else:
+            raise ValueError(f"Unknown X-Plane TX header mode: {header_mode!r} (use data0|null|data)")
 
     def close(self) -> None:
         try:
@@ -529,6 +540,9 @@ class XPlaneSender:
         pkt = self.DREF_HDR + self.DREF.pack(float(value)) + bname + b"\x00"
         self.sock.sendto(pkt, self.target)
 
+    def enable_packet_dump(self, n: int = 1) -> None:
+        self._dump_remaining = max(0, int(n))
+
     def send_controls(self, elevator: float, aileron: float, rudder: float, throttle: float = 0.5) -> None:
         """
         Sends two DATA groups:
@@ -536,13 +550,13 @@ class XPlaneSender:
           - 25:[throttle, -999, ...]
         This matches the Simulink pack function snippet.
         """
-        # print(f"sending controls: elevator: {elevator}, aileron: {aileron}, rudder: {rudder}, throttle: {throttle}")
-        now = time.time()
-        if now - self._last_override_s > 1.0:
-            self._last_override_s = now
-            # These are the usual knobs that make injected controls actually apply.
-            self.send_dref("sim/operation/override/override_joystick", 1.0)
-            self.send_dref("sim/operation/override/override_throttles", 1.0)
+        # Keep this function quiet by default (it can run at high rate).
+        # If you need verification, use --xplane-tx-dump-n to dump bytes.
+        # if now - self._last_override_s > 1.0:
+        #     self._last_override_s = now
+        #     # These are the usual knobs that make injected controls actually apply.
+        #     self.send_dref("sim/operation/override/override_joystick", 1.0)
+        #     self.send_dref("sim/operation/override/override_throttles", 1.0)
 
         def cl(x: float, lo: float, hi: float) -> float:
             return float(max(lo, min(hi, x)))
@@ -555,9 +569,13 @@ class XPlaneSender:
 
         g8 = self.GROUP.pack(8, ele, ail, rud, no, no, no, no, no)
         g25 = self.GROUP.pack(25, thr, no, no, no, no, no, no, no)
-        pkt = self.DATA_HDR + g8 + g25
+        # Simulink parity: header must be "DATA0" (ASCII '0' byte 48), followed immediately by records.
+        # DO NOT insert an extra record for '48' — it's a header byte, not a DATA group index.
+        pkt = self.data_hdr + g8 + g25
         self.sock.sendto(pkt, self.target)
-        print(f"self.target: {self.target}")
+        if self._dump_remaining > 0:
+            print(f"[xplane_tx] target={self.target} header={self.data_hdr!r} len={len(pkt)} hex={pkt.hex()}")
+            self._dump_remaining -= 1
 
 
 # ---------------- Logger ----------------
@@ -625,14 +643,26 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--xplane-rx-host", default="127.0.0.1", help="Host bind for X-Plane UDP receive (DATA packets).")
     p.add_argument("--xplane-rx-port", type=int, default=49004, help="UDP port to receive X-Plane DATA packets.")
     p.add_argument("--xplane-tx-host", default="127.0.0.1", help="X-Plane UDP destination host.")
-    p.add_argument("--xplane-tx-port", type=int, default=49001, help="X-Plane UDP destination port (controls).")
+    p.add_argument("--xplane-tx-port", type=int, default=49000, help="X-Plane UDP destination port (controls).")
     p.add_argument("--xplane-send", choices=["none", "data"], default="data", help="Control injection method.")
+    p.add_argument(
+        "--xplane-tx-hdr",
+        choices=["data0", "null", "data"],
+        default="data0",
+        help="Outgoing X-Plane DATA header bytes. data0 matches Simulink (b'DATA0').",
+    )
+    p.add_argument(
+        "--xplane-tx-dump-n",
+        type=int,
+        default=0,
+        help="If >0, hex-dump the first N outgoing X-Plane control packets (byte-for-byte debug vs Simulink).",
+    )
 
     # ESP32 (Stewart)
     p.add_argument("--stewart-com", default="COM14", help="ESP32 serial port (pose command + ACK).")
     p.add_argument("--stewart-baud", type=int, default=115200, help="ESP32 serial baud.")
     p.add_argument("--stewart-open-delay-s", type=float, default=1.5, help="Delay after opening ESP32 serial (handles auto-reset).")
-    p.add_argument("--pose-z-mm", type=float, default=0.0, help="Default Z translation (mm) for pose commands.")
+    p.add_argument("--pose-z-mm", type=float, default=20.0, help="Default Z translation (mm) for pose commands.")
 
     # PX4
     p.add_argument("--px4-com", default="COM13", help="PX4 serial port (MAVLink).")
@@ -709,7 +739,9 @@ def main() -> int:
     )
 
     xp_rx = XPlaneReceiver(args.xplane_rx_host, int(args.xplane_rx_port))
-    xp_tx = None if args.xplane_send == "none" else XPlaneSender(args.xplane_tx_host, int(args.xplane_tx_port))
+    xp_tx = None if args.xplane_send == "none" else XPlaneSender(args.xplane_tx_host, int(args.xplane_tx_port), header_mode=str(args.xplane_tx_hdr))
+    if xp_tx is not None and int(args.xplane_tx_dump_n) > 0:
+        xp_tx.enable_packet_dump(int(args.xplane_tx_dump_n))
     print(f"[hils_host] stewart_serial={args.stewart_com} baud={int(args.stewart_baud)}")
     if args.no_px4:
         print("[hils_host] px4: disabled (--no-px4)")
@@ -845,6 +877,16 @@ def main() -> int:
             xp_rx.close()
             if xp_tx is not None:
                 xp_tx.close()
+            pose = PoseCmd(
+                t_send_ns=t_tick,
+                x_mm=0.0,
+                y_mm=0.0,
+                z_mm=0.0,
+                roll_deg=0.0,
+                pitch_deg=0.0,
+                yaw_deg=0.0,
+            )
+            st.send_pose(pose)
             st.close()
         finally:
             log.close()
