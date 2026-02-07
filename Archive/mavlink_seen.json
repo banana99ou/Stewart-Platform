@@ -1,0 +1,412 @@
+{
+  "ACTUATOR_CONTROL_TARGET": {
+    "count": 271,
+    "example": {
+      "controls": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "group_mlx": 0,
+      "mavpackettype": "ACTUATOR_CONTROL_TARGET",
+      "time_usec": 3686182502
+    },
+    "first_t": 1769423986.5276315,
+    "last_t": 1769423995.695172,
+    "msg_id": 140,
+    "msg_type": "ACTUATOR_CONTROL_TARGET",
+    "rate_hz": 29.45173773931866
+  },
+  "ALTITUDE": {
+    "count": 90,
+    "example": {
+      "altitude_amsl": -62.628257751464844,
+      "altitude_local": -2.8079521656036377,
+      "altitude_monotonic": -62.628257751464844,
+      "altitude_relative": -2.8079521656036377,
+      "altitude_terrain": -2.907952070236206,
+      "bottom_clearance": 0.10000000149011612,
+      "mavpackettype": "ALTITUDE",
+      "time_usec": 3686642880
+    },
+    "first_t": 1769423987.0296762,
+    "last_t": 1769423995.695172,
+    "msg_id": 141,
+    "msg_type": "ALTITUDE",
+    "rate_hz": 10.270618243840733
+  },
+  "ATTITUDE": {
+    "count": 452,
+    "example": {
+      "mavpackettype": "ATTITUDE",
+      "pitch": 0.052421294152736664,
+      "pitchspeed": 0.0030065393075346947,
+      "roll": -0.014355824328958988,
+      "rollspeed": 0.000811302219517529,
+      "time_boot_ms": 3685937,
+      "yaw": 0.89646315574646,
+      "yawspeed": 0.006622478365898132
+    },
+    "first_t": 1769423986.0271602,
+    "last_t": 1769423996.1964295,
+    "msg_id": 30,
+    "msg_type": "ATTITUDE",
+    "rate_hz": 44.349302359854725
+  },
+  "ATTITUDE_QUATERNION": {
+    "count": 451,
+    "example": {
+      "mavpackettype": "ATTITUDE_QUATERNION",
+      "pitchspeed": 0.0030065393075346947,
+      "q1": 0.9008006453514099,
+      "q2": -0.017823943868279457,
+      "q3": 0.020508497953414917,
+      "q4": 0.4333820044994354,
+      "repr_offset_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rollspeed": 0.000811302219517529,
+      "time_boot_ms": 3685937,
+      "yawspeed": 0.006622478365898132
+    },
+    "first_t": 1769423986.0271602,
+    "last_t": 1769423995.695172,
+    "msg_id": 31,
+    "msg_type": "ATTITUDE_QUATERNION",
+    "rate_hz": 46.545246786969585
+  },
+  "BATTERY_STATUS": {
+    "count": 5,
+    "example": {
+      "battery_function": 1,
+      "battery_remaining": -1,
+      "charge_state": 1,
+      "current_battery": -1,
+      "current_consumed": -1,
+      "energy_consumed": -1,
+      "fault_bitmask": 0,
+      "id": 0,
+      "mavpackettype": "BATTERY_STATUS",
+      "mode": 0,
+      "temperature": 32767,
+      "time_remaining": 0,
+      "type": 1,
+      "voltages": [
+        65535,
+        65535,
+        65535,
+        65535,
+        65535,
+        65535,
+        65535,
+        65535,
+        65535,
+        65535
+      ],
+      "voltages_ext": [
+        65535,
+        65535,
+        65535,
+        65535
+      ]
+    },
+    "first_t": 1769423987.0296762,
+    "last_t": 1769423995.1804073,
+    "msg_id": 147,
+    "msg_type": "BATTERY_STATUS",
+    "rate_hz": 0.49075352351052653
+  },
+  "COMMAND_ACK": {
+    "count": 8,
+    "example": {
+      "command": 511,
+      "mavpackettype": "COMMAND_ACK",
+      "progress": 0,
+      "result": 0,
+      "result_param2": 0,
+      "target_component": 0,
+      "target_system": 255
+    },
+    "first_t": 1769423986.5276315,
+    "last_t": 1769423986.5276315,
+    "msg_id": 77,
+    "msg_type": "COMMAND_ACK",
+    "rate_hz": 0.0
+  },
+  "ESTIMATOR_STATUS": {
+    "count": 45,
+    "example": {
+      "flags": 228,
+      "hagl_ratio": 0.0,
+      "mag_ratio": 0.001191506045870483,
+      "mavpackettype": "ESTIMATOR_STATUS",
+      "pos_horiz_accuracy": 0.012165967375040054,
+      "pos_horiz_ratio": NaN,
+      "pos_vert_accuracy": 0.2709473967552185,
+      "pos_vert_ratio": 0.011782467365264893,
+      "tas_ratio": 0.0,
+      "time_usec": 3686642484,
+      "vel_ratio": NaN
+    },
+    "first_t": 1769423987.0296762,
+    "last_t": 1769423995.6931674,
+    "msg_id": 230,
+    "msg_type": "ESTIMATOR_STATUS",
+    "rate_hz": 5.078783914585216
+  },
+  "EXTENDED_SYS_STATE": {
+    "count": 18,
+    "example": {
+      "landed_state": 1,
+      "mavpackettype": "EXTENDED_SYS_STATE",
+      "vtol_state": 0
+    },
+    "first_t": 1769423987.0296762,
+    "last_t": 1769423995.6886673,
+    "msg_id": 245,
+    "msg_type": "EXTENDED_SYS_STATE",
+    "rate_hz": 1.9632772232706794
+  },
+  "HEARTBEAT": {
+    "count": 9,
+    "example": {
+      "autopilot": 12,
+      "base_mode": 65,
+      "custom_mode": 65536,
+      "mavlink_version": 3,
+      "mavpackettype": "HEARTBEAT",
+      "system_status": 3,
+      "type": 1
+    },
+    "first_t": 1769423987.0341926,
+    "last_t": 1769423995.183912,
+    "msg_id": 0,
+    "msg_type": "HEARTBEAT",
+    "rate_hz": 0.9816288797267342
+  },
+  "HIGHRES_IMU": {
+    "count": 451,
+    "example": {
+      "abs_pressure": 102077.0,
+      "diff_pressure": 74.17432403564453,
+      "fields_updated": 8191,
+      "id": 0,
+      "mavpackettype": "HIGHRES_IMU",
+      "pressure_alt": -62.422157287597656,
+      "temperature": 32.98999786376953,
+      "time_usec": 3685934926,
+      "xacc": 0.4579644501209259,
+      "xgyro": 0.0007011928246356547,
+      "xmag": -0.30972251296043396,
+      "yacc": 0.1826305091381073,
+      "ygyro": -0.0016563719836995006,
+      "ymag": 0.6254547238349915,
+      "zacc": -9.816128730773926,
+      "zgyro": 0.009116191416978836,
+      "zmag": 0.7688876390457153
+    },
+    "first_t": 1769423986.0271602,
+    "last_t": 1769423995.695172,
+    "msg_id": 105,
+    "msg_type": "HIGHRES_IMU",
+    "rate_hz": 46.545246786969585
+  },
+  "ODOMETRY": {
+    "count": 181,
+    "example": {
+      "child_frame_id": 12,
+      "estimator_type": 8,
+      "frame_id": 1,
+      "mavpackettype": "ODOMETRY",
+      "pitchspeed": -0.0009691123268567026,
+      "pose_covariance": [
+        9.633006993681192e-05,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        9.655396570451558e-05,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.07389313727617264,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "q": [
+        0.9003472924232483,
+        -0.017858460545539856,
+        0.020420357584953308,
+        0.4343256950378418
+      ],
+      "quality": 0,
+      "reset_counter": 3,
+      "rollspeed": 0.0017684142803773284,
+      "time_usec": 3686487219,
+      "velocity_covariance": [
+        0.0008377596386708319,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0008429381414316595,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.00480465916916728,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vx": -0.0021897670812904835,
+      "vy": 0.004866663832217455,
+      "vz": 0.0012788842432200909,
+      "x": -0.001835746574215591,
+      "y": -0.0003494173288345337,
+      "yawspeed": -0.0017646088963374496,
+      "z": 2.8079047203063965
+    },
+    "first_t": 1769423987.029174,
+    "last_t": 1769423995.695172,
+    "msg_id": 331,
+    "msg_type": "ODOMETRY",
+    "rate_hz": 20.770833361991624
+  },
+  "PING": {
+    "count": 10,
+    "example": {
+      "mavpackettype": "PING",
+      "seq": 3676,
+      "target_component": 0,
+      "target_system": 0,
+      "time_usec": 3686250450
+    },
+    "first_t": 1769423986.5276315,
+    "last_t": 1769423995.690667,
+    "msg_id": 4,
+    "msg_type": "PING",
+    "rate_hz": 0.982207272396871
+  },
+  "SCALED_IMU": {
+    "count": 226,
+    "example": {
+      "mavpackettype": "SCALED_IMU",
+      "temperature": 3300,
+      "time_boot_ms": 3686344,
+      "xacc": 68,
+      "xgyro": -5,
+      "xmag": -116,
+      "yacc": 49,
+      "ygyro": 2,
+      "ymag": 877,
+      "zacc": -1010,
+      "zgyro": 4,
+      "zmag": 440
+    },
+    "first_t": 1769423986.5286372,
+    "last_t": 1769423995.695172,
+    "msg_id": 26,
+    "msg_type": "SCALED_IMU",
+    "rate_hz": 24.54580737849698
+  },
+  "SCALED_IMU2": {
+    "count": 226,
+    "example": {
+      "mavpackettype": "SCALED_IMU2",
+      "temperature": 3255,
+      "time_boot_ms": 3686350,
+      "xacc": 73,
+      "xgyro": 1,
+      "xmag": 0,
+      "yacc": 40,
+      "ygyro": -4,
+      "ymag": 0,
+      "zacc": -1017,
+      "zgyro": -1,
+      "zmag": 0
+    },
+    "first_t": 1769423986.5286372,
+    "last_t": 1769423995.695172,
+    "msg_id": 116,
+    "msg_type": "SCALED_IMU2",
+    "rate_hz": 24.54580737849698
+  },
+  "SYSTEM_TIME": {
+    "count": 9,
+    "example": {
+      "mavpackettype": "SYSTEM_TIME",
+      "time_boot_ms": 3686643,
+      "time_unix_usec": 1769423986590000
+    },
+    "first_t": 1769423987.0306787,
+    "last_t": 1769423995.1804073,
+    "msg_id": 2,
+    "msg_type": "SYSTEM_TIME",
+    "rate_hz": 0.9816277884676398
+  },
+  "SYS_STATUS": {
+    "count": 9,
+    "example": {
+      "battery_remaining": -1,
+      "current_battery": -1,
+      "drop_rate_comm": 0,
+      "errors_comm": 0,
+      "errors_count1": 0,
+      "errors_count2": 0,
+      "errors_count3": 0,
+      "errors_count4": 0,
+      "load": 221,
+      "mavpackettype": "SYS_STATUS",
+      "onboard_control_sensors_enabled": 2451603484,
+      "onboard_control_sensors_health": 2183561247,
+      "onboard_control_sensors_present": 2451603516,
+      "voltage_battery": 65535
+    },
+    "first_t": 1769423987.0306787,
+    "last_t": 1769423995.1804073,
+    "msg_id": 1,
+    "msg_type": "SYS_STATUS",
+    "rate_hz": 0.9816277884676398
+  },
+  "TIMESYNC": {
+    "count": 90,
+    "example": {
+      "mavpackettype": "TIMESYNC",
+      "tc1": 0,
+      "ts1": 3686642759000
+    },
+    "first_t": 1769423987.029174,
+    "last_t": 1769423995.69417,
+    "msg_id": 111,
+    "msg_type": "TIMESYNC",
+    "rate_hz": 10.271210850804737
+  },
+  "UNKNOWN_411": {
+    "count": 4,
+    "example": {
+      "data": 
