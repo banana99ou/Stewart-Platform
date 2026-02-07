@@ -10,6 +10,14 @@
 #define STEWART_WIFI_DEBUG 1
 #endif
 
+// Minimal ACK line to avoid serial bandwidth/backlog issues at high command rates.
+// Format:
+//   ACK seq=<n> rx_us=<t> done_us=<t> sat=<0|1> ik=<XX>
+// where ik is a 2-hex-digit mask (uppercase, no "0x" prefix).
+#ifndef STEWART_MIN_ACK
+#define STEWART_MIN_ACK 1
+#endif
+
 // ---------------- Serial logging (optional) ----------------
 // When Simulink is not reading from the ESP32, heavy Serial.print can block and cause jerky motion.
 // Set to 0 for smooth high-rate control.
@@ -920,7 +928,7 @@ void computeAllServoAngles(const Vec3 bottom[],
     if (!solveServoAngleZAxis(originLocal, hLocal, uLocal, L, t1, t2)) {
       outSuccess[i] = false;
       outAngles[i] = 0.0f;
-      Serial.println("IK failed for servo " + String(i) + " with hLocal " + String(hLocal.x) + ", " + String(hLocal.y) + ", " + String(hLocal.z) + " and uLocal " + String(uLocal.x) + ", " + String(uLocal.y) + ", " + String(uLocal.z));
+      // Serial.println("IK failed for servo " + String(i) + " with hLocal " + String(hLocal.x) + ", " + String(hLocal.y) + ", " + String(hLocal.z) + " and uLocal " + String(uLocal.x) + ", " + String(uLocal.y) + ", " + String(uLocal.z));
       continue;
     }
 
@@ -928,7 +936,7 @@ void computeAllServoAngles(const Vec3 bottom[],
     if (!pickSolution(t1, t2, minDeg, maxDeg, 0.0f, theta)) {
       outSuccess[i] = false;
       outAngles[i] = 0.0f;
-      Serial.println("IK failed for servo " + String(i) + " with angles " + String(t1) + " and " + String(t2));
+      // Serial.println("IK failed for servo " + String(i) + " with angles " + String(t1) + " and " + String(t2));
       continue;
     }
 
@@ -1237,8 +1245,7 @@ static void processLine(const char *cstrLine, uint32_t rxUs) {
   }
 
   float x, y, z, rollDeg, pitchDeg, yawDeg;
-  if (sscanf(line.c_str(), "%f %f %f %f %f %f",
-             &x, &y, &z, &rollDeg, &pitchDeg, &yawDeg) == 6) {
+  if (sscanf(line.c_str(), "%f %f %f %f %f %f", &x, &y, &z, &rollDeg, &pitchDeg, &yawDeg) == 6) {
 #if STEWART_WIFI_DEBUG
     dbgLastParseOk = true;
     dbgParseOk++;
@@ -1259,10 +1266,10 @@ static void processLine(const char *cstrLine, uint32_t rxUs) {
     bool ikOk = applyPoseIK(x, y, z, rollDeg, pitchDeg, yawDeg, -90.0f, 90.0f);
     uint32_t tDone = micros();
 
-#if STEWART_WIFI_DEBUG
+#if STEWART_WIFI_DEBUG && !STEWART_MIN_ACK
     // Human-readable ACK/status line (still easy to parse):
     // ACK seq=<n> status=<OK|SAT|IK_FAIL|PARSE_FAIL|RX_OVERFLOW> flags=<TOKENS>
-    //     rx_us=<t> done_us=<t> dt_us=<t> ik_mask=0xXX sat=<0|1> lim=<deg> mag=<in>-><out>
+    //     rx_us=<t> done_us=<t> dt_us=<t> ik_mask=0xXX sat=<0|1> lim=<deg> mag=<in>-><out> a=<alpha>
     //     req=<x,y,z,r,p,y> applied_rpy=<r,p,y>
     uint32_t flags = ST_CMD_POSE | ST_PARSE_OK;
     if (WiFi.status() == WL_CONNECTED) flags |= ST_WIFI_CONNECTED;
@@ -1274,10 +1281,14 @@ static void processLine(const char *cstrLine, uint32_t rxUs) {
     char toks[80];
     flagsToTokens(flags, toks, sizeof(toks));
 
-    char buf[300];
+    // alpha is the direction-preserving saturation scale factor in rotation-vector space.
+    // When magInDeg ~ 0 (no commanded rotation), define alpha=1 to avoid 0/0.
+    float alpha = (gLastSatMagInDeg > 1e-6f) ? (gLastSatMagOutDeg / gLastSatMagInDeg) : 1.0f;
+
+    char buf[320];
     snprintf(
       buf, sizeof(buf),
-      "ACK seq=%lu status=%s flags=%s rx_us=%lu done_us=%lu dt_us=%lu ik_mask=0x%02X sat=%d lim=%.3f mag=%.3f->%.3f req=%.3f,%.3f,%.3f,%.3f,%.3f,%.3f applied_rpy=%.3f,%.3f,%.3f",
+      "ACK seq=%lu status=%s flags=%s rx_us=%lu done_us=%lu dt_us=%lu ik_mask=0x%02X sat=%d lim=%.3f mag=%.3f->%.3f a=%.4f req=%.3f,%.3f,%.3f,%.3f,%.3f,%.3f applied_rpy=%.3f,%.3f,%.3f",
       (unsigned long)seq,
       statusWordFrom(flags),
       toks,
@@ -1289,11 +1300,29 @@ static void processLine(const char *cstrLine, uint32_t rxUs) {
       (double)gLastSatLimitDeg,
       (double)gLastSatMagInDeg,
       (double)gLastSatMagOutDeg,
+      (double)alpha,
       (double)x, (double)y, (double)z,
       (double)gLastReqRoll, (double)gLastReqPitch, (double)gLastReqYaw,
       (double)gLastAppliedRoll, (double)gLastAppliedPitch, (double)gLastAppliedYaw
     );
     emitStatusLine(buf);
+#endif
+
+#if STEWART_MIN_ACK
+    // Minimal, low-bandwidth ACK for latency + saturation + IK diagnostics.
+    // Example:
+    //   ACK seq=5450 rx_us=3257496060 done_us=3257498458 sat=1 ik=3F
+    char mbuf[96];
+    snprintf(
+      mbuf, sizeof(mbuf),
+      "ACK seq=%lu rx_us=%lu done_us=%lu sat=%d ik=%02X",
+      (unsigned long)seq,
+      (unsigned long)rxUs,
+      (unsigned long)tDone,
+      gLastSatApplied ? 1 : 0,
+      (unsigned)gLastIkOkMask
+    );
+    emitStatusLine(mbuf);
 #endif
     return;
   }
@@ -1326,7 +1355,7 @@ static void serialPollLines() {
     } else {
       // Overflow: drop the line to resync on next newline.
       rxLen = 0;
-#if STEWART_WIFI_DEBUG
+#if STEWART_WIFI_DEBUG && !STEWART_MIN_ACK
       uint32_t flags = ST_PARSE_FAIL | ST_RX_OVERFLOW;
       if (WiFi.status() == WL_CONNECTED) flags |= ST_WIFI_CONNECTED;
       uint32_t now = micros();
@@ -1335,7 +1364,7 @@ static void serialPollLines() {
       char buf[220];
       snprintf(
         buf, sizeof(buf),
-        "ACK seq=0 status=%s flags=%s rx_us=%lu done_us=%lu dt_us=0 ik_mask=0x00 sat=0 lim=0 mag=0->0 req=0,0,0,0,0,0 applied_rpy=0,0,0",
+        "ACK seq=0 status=%s flags=%s rx_us=%lu done_us=%lu dt_us=0 ik_mask=0x00 sat=0 lim=0 mag=0->0 a=1.0000 req=0,0,0,0,0,0 applied_rpy=0,0,0",
         statusWordFrom(flags),
         toks,
         (unsigned long)now,
@@ -1350,7 +1379,7 @@ static void serialPollLines() {
 // ---------------- Arduino setup/loop ----------------
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(500000);
   // We use a non-blocking parser; keep default timeout (doesn't matter unless handleSerial() is used).
 
   ESP32PWM::allocateTimer(0);
