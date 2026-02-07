@@ -7,29 +7,28 @@ Priorities:
 
 ## P0 — Must do next (conference blockers)
 
-- [ ] **Implement PX4 ↔ Simulink MAVLink USB interface**
-  - [ ] Parse actuator outputs (primary)
-  - [ ] Parse attitude estimate (recommended)
-  - [ ] Parse arming/mode/status (recommended)
-- [ ] **Close the loop end-to-end**
-  - [ ] Route PX4 actuator outputs → Simulink → inject into X-Plane controls
-  - [ ] Verify “vehicle responds” acceptance criterion with PX4 in the loop
-- [ ] **Measure platform actuation range (roll/pitch/yaw) + define safe envelope**
-  - [ ] Document limits in degrees
-  - [ ] Implement + document clamp behavior when command exceeds range
-  - [ ] Ensure clamping is logged for later analysis
-- [ ] **Latency measurement (per-layer + end-to-end)**
-  - [ ] X-Plane → Simulink input latency
-  - [ ] Simulink compute latency
-  - [ ] Simulink → Stewart command latency
-  - [ ] Stewart motion → PX4 IMU response latency
-  - [ ] PX4 actuator output → Simulink receive latency
-  - [ ] Simulink injection → X-Plane response latency
-  - [ ] Produce latency time series + summary stats (mean/RMS/max/std)
-- [ ] **Error + latency plotting/analysis pipeline**
-  - [ ] Angles vs time; (if available) angular rates vs time
-  - [ ] Tracking error time series + stats (mean/RMS/max/std)
-  - [ ] Latency plots + stats (per-layer + end-to-end estimate)
+- [X] **Implement PX4 ↔ Simulink MAVLink USB interface**
+  - ~~[ ] Parse actuator outputs (primary)~~
+  - [X] Parse attitude estimate (using custom PID controller instead)
+  - ~~[ ] Parse arming/mode/status (recommended)~~
+- [X] **Close the loop end-to-end**
+  - [X] Route PX4 actuator outputs → Simulink → inject into X-Plane controls
+  - [X] Verify “vehicle responds” acceptance criterion with PX4 in the loop
+- [X] **Measure platform actuation range (roll/pitch/yaw) + define safe envelope**
+  - [X] Document limits in degrees
+  - [X] Implement + document clamp behavior when command exceeds range
+  - [X] Ensure clamping is logged for later analysis (ACK `sat` + `alpha` + command pairing)
+- [X] **Latency measurement (end-to-end, host clock)**
+  - [X] X-Plane → host sample age
+  - [X] PX4 → host sample age
+  - [X] Host → ESP32 serial RTT (pose send → ACK rx)
+  - [X] X-Plane RX → ACK (end-to-end proxy)
+  - [X] PX4 RX → ACK (end-to-end proxy)
+  - [X] Produce latency time series + summary stats (mean/RMS/max/std)
+- [X] **Error + latency plotting/analysis pipeline**
+  - [X] Angles vs time; (if available) angular rates vs time
+  - [X] Tracking error time series + stats (mean/RMS/max/std)
+  - [X] Latency plots + stats (end-to-end proxies)
 - [ ] **Run the primary experiment: trim transition (baseline)**
   - [ ] Scenario definition (initial condition + input command; e.g., pitch step 0° → +5°)
   - [ ] Logging: X-Plane attitude, PX4 attitude estimate, actuator outputs
@@ -39,6 +38,46 @@ Priorities:
   - [ ] Side-by-side visualization (X-Plane capture + real platform video)
   - [ ] Time-series plots (angles + angular rates if available)
   - [ ] Limitations/special findings: saturation, latency/jitter, missing aerodynamics, anomalies
+
+### P0 — Analysis action items (turn logs into paper figures)
+- [ ] **Define the “result narrative” in 3 claims (one paragraph)**
+  - [ ] Physical closed-loop HILS is achieved (sim → motion → IMU/FC → sim)
+  - [ ] Tracking fidelity is quantified (error stats) within feasible envelope
+  - [ ] Limitations are explained by latency + saturation + actuation limits (not hand-wavy)
+- [X] **Logging checklist (minimum signals + timestamps)**
+  - [X] Timestamp every stream at the receiver (host) with a common timebase
+  - [X] Log X-Plane attitude (roll/pitch/yaw), PX4 attitude estimate
+  - [X] Log platform command (pose/attitude) sent to ESP32
+  - [X] Log saturation/clamp state: flag + scaling factor α (via ESP32 ACK)
+  - [X] Log dropped packets / parse-fail counters (robustness) (at least host-side)
+- [ ] **Trim transition dataset (conference baseline)**
+  - [ ] Run pitch step (e.g., 0°→+5°) for N=3–5 repeats with identical initial conditions
+  - [ ] Export one “best” run for figures + full set for statistics
+- [ ] **Figure pack (minimum set for abstract/paper)**
+  - [ ] Fig. 1: system block diagram (protocols + rates annotated)
+  - [ ] Fig. 2: time series overlay — X-Plane attitude vs PX4 attitude (+ error plot)
+  - [ ] Fig. 3: latency breakdown (end-to-end + per-layer if available)
+  - [ ] Table 1: update rates + interfaces (UDP/USB serial/MAVLink) + payload formats
+- [ ] **Metric pack (numbers to quote in text)**
+  - [ ] Attitude error per axis: mean / RMS / max / std (after time alignment)
+  - [ ] End-to-end latency: mean / RMS / max / std
+  - [ ] Saturation rate: % time saturated + distribution of α
+- [ ] **Time alignment method (so “error” is meaningful)**
+  - [ ] Estimate effective delay between X-Plane and PX4 attitude (e.g., cross-correlation) and compensate before computing stats
+  - [ ] Report both “raw” and “aligned” error summary (at least in internal plots)
+- [ ] **Saturation impact analysis**
+  - [ ] Condition metrics on α=1 vs α<1 (error/latency differences)
+  - [ ] Plot α(t) alongside command magnitude to show graceful degradation
+
+### P0 — New action items (requested)
+- [ ] **Implement trim transition test scenario**
+  - [ ] Scripted profile: hold → step (0→+5° pitch) → hold → return (optional)
+  - [ ] Repeat N=3–5 runs automatically with consistent initialization
+  - [ ] Save run name + scenario parameters in run_meta.json
+- [ ] **Edit post-processing to show saturation statistics**
+  - [ ] % time saturated (sat flag)
+  - [ ] α distribution (histogram + summary stats)
+  - [ ] Error conditioned on α=1 vs α<1 (mean/RMS/max/std)
 
 ## P1 — Validation + credibility improvements
 
@@ -56,6 +95,19 @@ Priorities:
   - [ ] Define metrics: overshoot, settling time, steady-state error
   - [ ] Choose implementation approach (outer-loop in Simulink vs full surface-command controller)
   - [ ] Produce quantitative plots + side-by-side physical behavior evidence
+
+### P1 — Extra analyses (high insight, low risk)
+- [ ] **Repeatability / hysteresis**
+  - [ ] Repeat same trim transition N times; plot ensemble mean ± std band
+  - [ ] Report run-to-run variation (std, max-min)
+- [ ] **Cross-axis coupling**
+  - [ ] Command pure pitch/roll; quantify leakage into other axes (coupling matrix estimate)
+  - [ ] Compare coupling in mid-range vs near workspace boundary
+- [ ] **Bandwidth characterization (optional but strong)**
+  - [ ] Small-amplitude sine input sweep (no saturation); estimate gain/phase vs frequency
+  - [ ] Quote effective attitude bandwidth / phase lag
+- [ ] **Robustness stats**
+  - [ ] Report packet drop, parse-fail, watchdog counts over long run (e.g., 10–30 min)
 
 ## P2 — Nice-to-have / robustness
 
