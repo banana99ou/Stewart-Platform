@@ -1,3 +1,31 @@
+"""
+postprocess_run.py
+
+This script post-processes a Hardware-In-the-Loop Simulation (HILS) run directory, typically named logs/run-YYYYMMDD-HHMMSS/,
+by generating summary metrics and diagnostic plots for tracking errors and end-to-end system latencies. It supports a variety 
+of command-line options to control analysis windows, output file names, and plotting behavior.
+
+Major features:
+- Loads time series measurements from tick.csv and stewart_ack.csv in the specified run directory.
+- Calculates and records tracking error statistics (between PX4, X-Plane, and commanded states).
+- Calculates sample ages and end-to-end latencies between sample receipt and ACKs.
+- Optionally conditions error statistics on actuator saturation.
+- Produces a JSON metrics file and several diagnostic plots: tracking errors over time, latency, saturation scale (alpha), etc.
+- Supports interactive legend toggling in plots when run with --show.
+
+Functions:
+- Utility conversion (to float/int), robust NaN handling, time diff/statistics, etc.
+- Stats and summary stats calculation for time series.
+- Plot utilities including Matplotlib setup and clickable legends.
+- Main routine parses arguments, loads/joins all required log data, computes metrics, writes outputs, and generates plots.
+
+For usage/help, run:
+    python postprocess_run.py --help
+
+Batch processing:
+    for d in ./logs/*/; do [[ "$d" != *-tracking-test*/ ]] && python postprocess_run.py "$d"; done
+"""
+
 from __future__ import annotations
 
 import argparse
