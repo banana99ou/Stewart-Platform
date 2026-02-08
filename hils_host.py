@@ -1021,6 +1021,10 @@ def main() -> int:
                 logging.warning("postprocess_run.py not found next to hils_host.py; skipping postprocess.")
                 return
             cmd = [sys.executable, str(pp), str(run_dir)]
+            # If a finite scenario is active, ignore the initial warmup period in analysis.
+            # This prevents startup/transient behavior from polluting the quoted metrics.
+            if scenario is not None:
+                cmd += ["--skip-first-s", str(float(scenario.warmup_s))]
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode != 0:
                 logging.warning("postprocess_run.py failed (rc=%d). stderr:\n%s", r.returncode, (r.stderr or "").strip())
