@@ -10,28 +10,32 @@ Priorities:
 ## P0 — Do next (in dependency order)
 
 ### P0.1 — Define + automate the baseline scenario (enables everything below)
-- [ ] **Implement trim transition test scenario**
-  - [ ] Scripted profile: hold → step (0→+5° pitch) → hold → return (optional)
-  - [ ] Repeat N=3–5 runs automatically with consistent initialization
-  - [ ] Save run name + scenario parameters in run_meta.json
-- [ ] **Run the primary experiment: trim transition (baseline)**
-  - [ ] Scenario definition (initial condition + input command; e.g., pitch step 0° → +5°)
-  - [ ] Logging: X-Plane attitude, PX4 attitude estimate, actuator outputs
-  - [ ] Repeat 3–5 times for conference-grade results
+- [X] **Implement trim transition test scenario**
+  - [X] Scripted profile: hold → step (0→+5° pitch) → hold → return (optional)
+  - [X] Repeat N=3–5 runs automatically with consistent initialization
+  - [X] Save run name + scenario parameters in run_meta.json
+- [X] **Run the primary experiment: trim transition (baseline)**
+  - [X] Scenario definition (initial condition + input command; e.g., pitch step 0° → +5°)
+  - [X] Logging: X-Plane attitude, PX4 attitude estimate, actuator outputs
+  - [X] Repeat 3–5 times for conference-grade results
 
 ### P0.2 — Collect the conference baseline dataset (depends on P0.1)
-- [ ] **Trim transition dataset (conference baseline)**
-  - [ ] Run pitch step (e.g., 0°→+5°) for N=3–5 repeats with identical initial conditions
-  - [ ] Export one “best” run for figures + full set for statistics
+- [X] **Trim transition dataset (conference baseline)**
+  - [X] Run pitch step (e.g., 0°→+5°) for N=3–5 repeats with identical initial conditions
+  - [X] Export one “best” run for figures + full set for statistics
+  - [x] Best-looking run (pitch overlay + lowest `pitch_px4_minus_xp_deg` RMS among runs #5–#9): `logs/run-20260208-210808 #8/`
 
 ### P0.3 — Post-process + compute paper numbers (depends on P0.2)
 - [ ] **Time alignment method (so “error” is meaningful)**
   - [ ] Estimate effective delay between X-Plane and PX4 attitude (e.g., cross-correlation) and compensate before computing stats
   - [ ] Report both “raw” and “aligned” error summary (at least in internal plots)
-- [ ] **Edit post-processing to show saturation statistics**
-  - [ ] % time saturated (sat flag)
-  - [ ] α distribution (histogram + summary stats)
-  - [ ] Error conditioned on α=1 vs α<1 (mean/RMS/max/std)
+- [ ] **Add per-run PX4:stewart mounting bias to Postprocessing_run.py**
+  - [ ] Estimate roll/pitch bias using the `hold_0` window (or another steady window) per run
+  - [ ] Report both raw and bias-corrected tracking metrics (mean/RMS/max/std)
+- [X] **Edit post-processing to show saturation statistics**
+  - [X] % time saturated (sat flag)
+  - [X] α distribution (histogram + summary stats)
+  - [X] Error conditioned on α=1 vs α<1 (mean/RMS/max/std)
 - [ ] **Metric pack (numbers to quote in text)**
   - [ ] Attitude error per axis: mean / RMS / max / std (after time alignment)
   - [ ] End-to-end latency: mean / RMS / max / std
