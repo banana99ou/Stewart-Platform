@@ -28,14 +28,14 @@ This system differentiates itself by having **an actual flight controller and IM
 - Real-time vehicle dynamics simulation
 - Provides attitude/motion signals and accepts control inputs
 
-### 2.2 Simulink Interface Layer (single model file)
-A **single Simulink model** integrates:
-- X-Plane UDP interface (state extraction + control injection)
-- Stewart command generation + platform control
-- PX4 MAVLink interface (USB)
-- Logging hooks (tracking error + latency)
+### 2.2 Host interface layer (Python baseline + optional Simulink model)
+**Baseline (used for current datasets):** `hils_host.py` (single-process Python host) integrates:
+- X-Plane UDP interface (state receive + control injection)
+- Stewart MCU serial interface (pose command + ACK/status)
+- PX4 MAVLink interface (ATTITUDE stream for physical IMU/estimator)
+- Logging + post-processing hooks (tracking error, latency, saturation)
 
-**Simulink sample time (`dt` / `Ts`)**: the discrete execution/update interval of the Simulink model (how often blocks run and I/O updates).
+**Optional / legacy:** `matlab/XplaneControlInterface.slx` (Simulink model) exists as an alternate integration path.
 
 ### 2.3 Stewart Platform (RC-servo actuators)
 - Executes commanded pose within mechanical/servo constraints
@@ -45,27 +45,78 @@ A **single Simulink model** integrates:
 ### 2.4 Flight Controller: Pix32 v6 with PX4
 - Mounted on platform
 - Uses onboard IMU + estimator
-- Outputs control surface commands
-- Communicates via USB serial MAVLink to Simulink host
+- Communicates via USB serial MAVLink to the host
+
+**Control-structure note (important):**
+- In the current baseline, PX4 is used primarily as a **physical IMU/estimator** (ATTITUDE feedback).
+- **Control injection into X-Plane is performed by a custom host-side PID** (see `hils_host.py`), not by PX4’s onboard attitude controller.
 
 ---
 
 ## 3) Interfaces and Protocols (explicit)
 | Link | Physical | Protocol | Notes |
 |---|---|---|---|
-| X-Plane ↔ Simulink | Ethernet/loopback | **UDP** | X-Plane state out + control in |
-| Simulink ↔ Stewart MCU | USB | **USB serial** | command + (optional) status |
-| PX4 (Pix32 v6) ↔ Simulink | USB | **MAVLink over USB serial** | actuator outputs + attitude + status |
+| X-Plane ↔ Host (`hils_host.py`) | Ethernet/loopback | **UDP** | X-Plane state out + control in |
+| Host ↔ Stewart MCU | USB | **USB serial** | pose command + ACK/status |
+| PX4 (Pix32 v6) ↔ Host | USB | **MAVLink over USB serial** | attitude estimate (ATTITUDE) + (optional) status |
 
 ---
 
+## 3.1) X-Plane UDP: ports + packet format (critical)
+
+### 3.1.1 Default ports (Python host baseline)
+- **X-Plane → Host (state)**: `127.0.0.1:49004` (`--xplane-rx-port 49004`)
+- **Host → X-Plane (controls)**: `127.0.0.1:49000` (`--xplane-tx-port 49000`)
+
+### 3.1.2 X-Plane settings checklist (known-good)
+In **X-Plane → Settings → Data Output → Network configuration**:
+- Enable at least one **DATA output row** that contains attitude (commonly group 17).
+- Set destination to **`127.0.0.1:49004`** (host RX port).
+
+In **X-Plane → Settings → Network → UDP ports**:
+- Set **Port we receive on** (and **legacy**) to the host TX port (commonly **49000**).
+- Set **Port we send from (legacy)** to a value that works on your machine.
+  - If Windows reports bind/port conflicts, make this **different** from the host RX port (e.g. 49005).
+
+### 3.1.3 Packet formats (what actually mattered for integration)
+
+**X-Plane DATA record layout** (little-endian):
+- **record** = `int32 index` + `8 * float32` (36 bytes)
+- `-999.0` means “no command / ignore” for that field.
+
+**Host → X-Plane control injection** (what broke vs Simulink until fixed):
+- Header must be **`DATA0`** (ASCII `'0'` = byte **48**), not `DATA\\0`.
+- The packet is:
+  - `b"DATA0"` (5 bytes) +
+  - record index **8** (surfaces) +
+  - record index **25** (throttle)
+
+This matches the Simulink Byte Pack stream:
+`68 65 84 65 48 ...` (ASCII `DATA0`).
+
+**X-Plane → Host state receive**:
+- The host accepts payloads starting with `b"DATA"` and auto-detects header length **4 vs 5** bytes by checking whether the remainder is a multiple of 36.
+
 ## 4) High-Level Data Flow (Closed Loop)
-1. X-Plane → (UDP) → Simulink: simulated attitude/motion
-2. Simulink → (USB serial) → Stewart MCU: pose command → Stewart moves
-3. Stewart motion → PX4 IMU senses real motion → PX4 computes actuator outputs
-4. PX4 → (MAVLink USB) → Simulink: actuator outputs (+ attitude estimate)
-5. Simulink → (UDP) → X-Plane: inject control surface commands
+1. X-Plane → (UDP) → Host: simulated attitude/motion
+2. Host → (USB serial) → Stewart MCU: pose command → Stewart moves
+3. Stewart motion → PX4 IMU senses real motion → PX4 estimates attitude
+4. PX4 → (MAVLink USB) → Host: attitude estimate (physical IMU proxy)
+5. Host → (UDP) → X-Plane: inject control surface commands (host-side PID using PX4 attitude)
 6. Repeat
+
+---
+
+## 4.1 Reproducibility / versions (dataset provenance)
+To reproduce the results, please check out commit `49247330b62a792a53e6f2d933b44067f9b338b4`—this is the exact code version used to generate all reported figures and metrics.
+
+## 4.2 Python environment
+- **Python**: 3.8.3 (Windows; `C:\\Python38\\python.exe`)
+- **Dependencies**: see `requirements.txt`
+
+```bash
+pip install -r requirements.txt
+```
 
 ---
 
@@ -101,6 +152,63 @@ The KSAS paper/presentation must include:
   - actuator outputs (elevator/etc.)
 - Report tracking error stats (Mean / RMS / Max / Std)
 
+#### 6.1.0 Baseline sim scenario (as-tested; include in paper)
+- **X-Plane**: 12.3.3-r1
+- **Aircraft**: Cirrus Vision SF50
+- **Failure**: none
+- **CG**: -1.2 inches
+- **Total payload**: 724.5 lbs
+- **Total fuel weight**: 577.3 lbs
+- **Location / start condition**: Kaaeloa (PHJR), Runway 04R, 10 nm approach
+- **Weather**: clear
+- **Time**: Jan 26th, 18:21 local
+- **Controls**: no joystick, no autopilot
+- **UDP output rate**: 50 packets/sec
+- **Video**: 3 side-by-side recordings captured (X-Plane + platform)
+- **Best run (for figures)**: `logs/run-20260208-210808 #8/`
+
+#### 6.1.1 Test protocol (field checklist)
+This project’s baseline “trim transition” dataset is intended to be repeatable enough for conference figures, even if the X-Plane reset is manual.
+
+- **Pre-flight setup**
+  - Connect hardware: Stewart platform (ESP32), PX4 (Pix32 v6), host PC.
+  - Boot X-Plane and load the desired initial condition (e.g., “Hawaii / Honolulu 10 nm approach” scenario).
+  - Ensure X-Plane UDP output is enabled at the expected rate (commonly 50 Hz) and configured to send `DATA*` to the host RX port.
+
+- **Run protocol (manual repeat — simplest / what we actually use most often)**
+  - Pause the sim (optional; depends on your X-Plane UDP behavior).
+  - Start the host:
+
+```bash
+python hils_host.py --scenario trim-transition --scenario-warmup-s 10 --scenario-hold-s 10 --scenario-step-pitch-deg 5
+```
+
+  - Unpause the sim.
+  - Observe: the host holds pitch setpoint at 0°, steps to +5°, then returns to 0° (time-based), and exits cleanly with logs.
+  - Reset the sim back to the same initial condition.
+  - Re-run the same command for N=3–5 repeats (each repeat is a fresh program run and a fresh log folder).
+
+- **Run protocol (scripted repeats — untested)** \
+If you want the host to manage repeat folders in a single session, use `--scenario-repeats` and optionally wait for manual X-Plane reset between repeats:
+
+```bash
+python hils_host.py --scenario trim-transition --scenario-warmup-s 10 --scenario-hold-s 10 --scenario-step-pitch-deg 5 --scenario-repeats 5 --repeat-wait-enter
+```
+
+- **Expected outputs (per run folder under `logs/run-*/`)**
+  - `tick.csv`: host-tick snapshots (includes scenario phase + pitch setpoint when scenario mode is used)
+  - `xplane_att.csv`: raw X-Plane receive samples
+  - `px4_att.csv`: raw PX4 receive samples
+  - `stewart_ack.csv`: per-command ACK/status from the ESP32 paired with sent commands
+  - `run_meta.json`: run configuration + scenario parameters
+  - `integrity.json`: lightweight integrity summary (tick gaps, sample presence, ACK health)
+  - Postprocess outputs (if enabled): `postprocess_*.png`, `postprocess_*_metrics.json`
+
+- **Minimum sanity checks (per repeat)**
+  - X-Plane + PX4 streams are present (not empty).
+  - ESP32 ACKs are present (`ack_total > 0`), and queue depth does not grow without bound.
+  - The pitch setpoint step is visible in the logs/plots (`sp_pitch_deg`).
+
 ### 6.2 Optional: Controller comparison experiment (Option B)
 Optional controller comparison experiment: **compare PID vs sliding mode control** (and/or vector field guidance, if applicable) using:
 - **overshoot**
@@ -116,19 +224,21 @@ Implementation note (two feasible approaches):
 
 ## 7) Timing, Rates, and Latency Measurement (required)
 ### 7.1 Definitions
-- `dt` / `Ts`: Simulink base sample time = 100Hz
-- `f_cmd`: effective Stewart command update rate (often ≈ 1/dt, but must be measured)
-- `f_xplane`: X-Plane update/output rate
-- `f_mav`: MAVLink message/actuator output rate
+- `dt` / `Ts`: Simulink base sample time (if using Simulink path; often 100 Hz)
+- `f_tick`: Python host control tick (`hils_host.py --tick-hz`, current default **50 Hz**)
+- `f_xplane`: X-Plane DATA output rate (commonly **50 packets/sec** in current datasets)
+- `f_pose`: effective Stewart pose update rate (≈ host tick when the host sends one pose per tick; bounded by serial + IK compute)
+- `f_pwm`: servo PWM rate on ESP32 (**50 Hz**, set via `setPeriodHertz(50)` in firmware)
+- `f_mav`: PX4 MAVLink ATTITUDE stream request rate (`--px4-att-hz`, default **100 Hz**)
 
 ### 7.2 Latency measurement plan (must-do for conference)
 Implementation status + any refinements are tracked in `ToDo.md`. Measurement targets:
-- X-Plane → Simulink input latency
-- Simulink compute latency
-- Simulink → Stewart command latency
+- X-Plane → host input latency
+- Host compute latency
+- Host → Stewart command latency
 - Stewart motion → PX4 IMU response latency
-- PX4 actuator output → Simulink receive latency
-- Simulink injection → X-Plane response latency
+- PX4 attitude output → host receive latency
+- Host injection → X-Plane response latency
 
 Deliverables:
 - per-layer latency time series + summary stats (mean/RMS/max/std)
@@ -136,16 +246,7 @@ Deliverables:
 
 ---
 
-## 8) Current Status
-### 8.1 Working
-- Stewart platform ↔ Simulink ↔ X-Plane integration is working.
-
-### 8.2 Not yet implemented / missing artifacts
-This section easily goes stale; the canonical, up-to-date status and remaining work live in `ToDo.md`.
-
----
-
-## 9) TODOs / Task tracking
+## 8) TODOs / Task tracking
 The canonical TODO list (with priorities + completion status) is maintained in `ToDo.md`.
 
 ---
@@ -164,18 +265,18 @@ What it does:
 - Commands roll/pitch steps at multiple yaw angles
 - Writes `summary.csv` + raw samples under `logs/run-*/`
 
-### 9.5 Rotation-axis offset (MEDIUM)
+### 8.5 Rotation-axis offset (MEDIUM)
 - implement configurable rotation center offset in kinematic mapping
 - document calibration procedure
 
-### 9.6 Saturation/status flags (LOW)
+### 8.6 Saturation/status flags (LOW)
 - command clamp/near-limit flag
 - watchdog timeout flag
 - log into dataset
 
 ---
 
-## 10) Acceptance Criteria
+## 9) Acceptance Criteria
 ### A) Bring-up (minimum viable)
 1. PC detects Pix32 v6 over USB reliably.
 2. Simulink receives PX4 actuator outputs in real time.
