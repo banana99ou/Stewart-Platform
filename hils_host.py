@@ -47,6 +47,7 @@ import struct
 import sys
 import time
 import logging
+import subprocess
 from collections import deque
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -466,7 +467,7 @@ class Px4Mavlink:
         pitch = float(np.rad2deg(msg.pitch))
         yaw = float(np.rad2deg(msg.yaw))
 
-        logging.debug("roll: %s, pitch: %s, yaw: %s", roll, pitch, yaw)
+        logging.warning("PX4 roll: %s, pitch: %s, yaw: %s", roll, pitch, yaw)
 
         time_boot_ms = getattr(msg, "time_boot_ms", None)
         att = Px4Attitude(
@@ -613,6 +614,23 @@ class XPlaneReceiver:
         v_true = None
         climb = None
         thr_act = None
+
+        # Airspeed (common X-Plane DATA group):
+        # index 3 is typically "speeds". Field ordering varies slightly across setups, but most commonly:
+        #   v[0] = V_indicated (kts)
+        #   v[1] = V_true      (kts)
+        #   v[2] = V_ground    (kts)
+        # We only use IAS/TAS if present; otherwise they remain None.
+        if 3 in groups:
+            v = groups[3]
+            try:
+                v_ind = float(v[0])
+            except Exception:
+                v_ind = None
+            try:
+                v_true = float(v[1])
+            except Exception:
+                v_true = None
 
         # print(f"pitch: {pitch}, roll: {roll}, heading: {heading}, p: {p}, q: {q}, r: {r}")
 
@@ -853,10 +871,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--kp-roll", type=float, default=0.1)
     p.add_argument("--ki-roll", type=float, default=0.02)
     p.add_argument("--kd-roll", type=float, default=0.0)
-    p.add_argument("--kp-pitch", type=float, default=0.03)
-    p.add_argument("--ki-pitch", type=float, default=0.1)
-    p.add_argument("--kd-pitch", type=float, default=0.0)
-    p.add_argument("--kp-yaw", type=float, default=0.0)
+    p.add_argument("--kp-pitch", type=float, default=0.04)
+    p.add_argument("--ki-pitch", type=float, default=0.2)
+    p.add_argument("--kd-pitch", type=float, default=0.01)
+    p.add_argument("--kp-yaw", type=float, default=-0.0)
     p.add_argument("--ki-yaw", type=float, default=0.0)
     p.add_argument("--kd-yaw", type=float, default=0.0)
     p.add_argument("--pid-start-delay-s", type=float, default=3.5, help="Delay before enabling PX4->PID->X-Plane control injection (lets PX4 settle).")
@@ -865,9 +883,36 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--u-limit", type=float, default=1.0, help="Control output limit (normalized, -1..+1).")
     p.add_argument("--throttle", type=float, default=1.0, help="Injected throttle command (clamped to 0..1).")
 
+    # Speed PID (throttle)
+    p.add_argument(
+        "--speed-pid",
+        action="store_true",
+        help="Enable speed-hold PID that drives throttle using X-Plane airspeed (fallbacks to --throttle if speed missing).",
+    )
+    p.add_argument(
+        "--speed-source",
+        choices=["kias", "ktas"],
+        default="kias",
+        help="Which X-Plane speed field to use for speed PID measurement.",
+    )
+    p.add_argument("--sp-speed", type=float, default=180.0, help="Speed setpoint (knots) for speed PID.")
+    p.add_argument("--kp-speed", type=float, default=0.04, help="Speed PID Kp (throttle per knot).")
+    p.add_argument("--ki-speed", type=float, default=0.005, help="Speed PID Ki (throttle per knot*s).")
+    p.add_argument("--kd-speed", type=float, default=0.0, help="Speed PID Kd (throttle per knot/s).")
+    p.add_argument("--speed-i-limit", type=float, default=200.0, help="Speed PID integral clamp (knot*s).")
+    p.add_argument("--speed-u-limit", type=float, default=0.5, help="Speed PID output clamp (delta throttle).")
+    p.add_argument("--throttle-base", type=float, default=0.5, help="Base throttle used when speed PID is enabled (before PID delta).")
+    p.add_argument("--throttle-min", type=float, default=0.0, help="Minimum throttle clamp.")
+    p.add_argument("--throttle-max", type=float, default=1.0, help="Maximum throttle clamp.")
+
     # Logging
     p.add_argument("--run-name", default="", help="Optional run name suffix.")
     p.add_argument("--log-dir", default="logs", help="Base log directory.")
+    p.add_argument(
+        "--no-postprocess",
+        action="store_true",
+        help="If set, do not call postprocess_run.py on exit.",
+    )
 
     # Scenario (time-varying pitch setpoint, conference baseline)
     p.add_argument("--scenario", choices=["none", "trim-transition"], default="none", help="Run a finite scenario and exit cleanly.")
@@ -936,11 +981,56 @@ def main() -> int:
     pid_roll = PID(args.kp_roll, args.ki_roll, args.kd_roll, args.i_limit, args.u_limit) if px4 is not None else None
     pid_pitch = PID(args.kp_pitch, args.ki_pitch, args.kd_pitch, args.i_limit, args.u_limit) if px4 is not None else None
     pid_yaw = PID(args.kp_yaw, args.ki_yaw, args.kd_yaw, args.i_limit, args.u_limit) if px4 is not None else None
+    pid_speed = PID(args.kp_speed, args.ki_speed, args.kd_speed, args.speed_i_limit, args.speed_u_limit) if bool(args.speed_pid) else None
 
     print("[hils_host] Ctrl+C to stop (or scenario will exit cleanly).")
 
     # Track the last tick timestamp for shutdown pose cmd.
     t_tick = monotonic_ns()
+    last_run_dir: Optional[Path] = None
+
+    def _send_neutral_pose_now() -> None:
+        """
+        Best-effort "reset platform pose" for shutdown.
+        Uses z_mm=0 to match the existing Ctrl+C behavior in this script.
+        """
+        try:
+            pose = PoseCmd(
+                t_send_ns=monotonic_ns(),
+                x_mm=0.0,
+                y_mm=0.0,
+                z_mm=20.0,
+                roll_deg=0.0,
+                pitch_deg=0.0,
+                yaw_deg=0.0,
+            )
+            st.send_pose(pose)
+        except Exception:
+            pass
+
+    def _postprocess_run_dir(run_dir: Path) -> None:
+        """
+        Best-effort run of postprocess_run.py for this run_dir.
+        Never raises (we don't want shutdown to fail).
+        """
+        if bool(args.no_postprocess):
+            return
+        try:
+            pp = Path(__file__).with_name("postprocess_run.py")
+            if not pp.exists():
+                logging.warning("postprocess_run.py not found next to hils_host.py; skipping postprocess.")
+                return
+            cmd = [sys.executable, str(pp), str(run_dir)]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                logging.warning("postprocess_run.py failed (rc=%d). stderr:\n%s", r.returncode, (r.stderr or "").strip())
+            else:
+                # Keep stdout for user visibility (paths written, etc.)
+                out = (r.stdout or "").strip()
+                if out:
+                    print(out)
+        except Exception as e:
+            logging.warning("postprocess_run.py invocation error: %s", e)
 
     try:
         for rep_idx in range(repeats):
@@ -949,6 +1039,7 @@ def main() -> int:
 
             rep_suffix = f"-rep{rep_idx+1:02d}" if repeats > 1 else ""
             run_dir = Path(args.log_dir) / f"{base_run_name}{rep_suffix}"
+            last_run_dir = run_dir
             log = RunLogger(run_dir)
 
             meta: Dict = {
@@ -974,6 +1065,20 @@ def main() -> int:
                     "u_limit": float(args.u_limit),
                     "pid_start_delay_s": float(args.pid_start_delay_s),
                 },
+                "speed_pid": {
+                    "enabled": bool(args.speed_pid),
+                    "source": str(args.speed_source),
+                    "sp_speed_kt": float(args.sp_speed),
+                    "kp": float(args.kp_speed),
+                    "ki": float(args.ki_speed),
+                    "kd": float(args.kd_speed),
+                    "i_limit": float(args.speed_i_limit),
+                    "u_limit": float(args.speed_u_limit),
+                    "throttle_base": float(args.throttle_base),
+                    "throttle_min": float(args.throttle_min),
+                    "throttle_max": float(args.throttle_max),
+                    "throttle_fallback": float(args.throttle),
+                },
                 "scenario": {"kind": "none"},
             }
             if scenario is not None:
@@ -997,6 +1102,8 @@ def main() -> int:
                 pid_pitch.reset()
             if pid_yaw is not None:
                 pid_yaw.reset()
+            if pid_speed is not None:
+                pid_speed.reset()
 
             # Clear serial buffers / pairing queue to avoid cross-repeat contamination.
             try:
@@ -1211,6 +1318,8 @@ def main() -> int:
                             pid_pitch.reset()
                         if pid_yaw is not None:
                             pid_yaw.reset()
+                    if (not pid_enabled) and pid_speed is not None:
+                        pid_speed.reset()
 
                     # Scenario-driven pitch setpoint (time-varying)
                     sp_pitch_deg = float(args.sp_pitch_deg)
@@ -1232,8 +1341,33 @@ def main() -> int:
                     else:
                         u_ail = u_ele = u_rud = 0.0
 
+                    # Speed PID -> throttle (uses X-Plane speed measurement)
+                    sp_speed = float(args.sp_speed)
+                    v_meas = None
+                    u_thr = 0.0
+                    if xp is not None:
+                        src = str(args.speed_source).strip().lower()
+                        if src == "ktas":
+                            v_meas = xp.v_true_ktas
+                        else:
+                            v_meas = xp.v_ind_kias
+
+                    throttle_cmd = float(args.throttle)
+                    speed_pid_enabled = bool(pid_enabled) and (pid_speed is not None) and (xp_tx is not None) and (args.xplane_send == "data")
+                    if speed_pid_enabled and (v_meas is not None):
+                        # Use host tick dt for stability (PX4 dt can jitter or be absent on platform-only runs).
+                        dt_speed_s = float(tick_dt_ns) / 1e9
+                        u_thr = pid_speed.update(sp_speed, float(v_meas), dt_speed_s)
+                        base = float(args.throttle_base)
+                        tmin = float(args.throttle_min)
+                        tmax = float(args.throttle_max)
+                        throttle_cmd = max(tmin, min(tmax, base + u_thr))
+                    elif pid_speed is not None and bool(args.speed_pid) and (v_meas is None):
+                        # No measurement -> reset to avoid integrator windup.
+                        pid_speed.reset()
+
                     if xp_tx is not None and args.xplane_send == "data":
-                        xp_tx.send_controls(u_ele, u_ail, u_rud, throttle=float(args.throttle))
+                        xp_tx.send_controls(u_ele, u_ail, u_rud, throttle=float(throttle_cmd))
 
                     # Tick log (latest-sample-hold snapshot)
                     row = {
@@ -1249,6 +1383,8 @@ def main() -> int:
                         "xp_roll_deg": xp.roll_deg if xp else "",
                         "xp_pitch_deg": xp.pitch_deg if xp else "",
                         "xp_heading_deg": xp.heading_deg if xp else "",
+                        "xp_v_ind_kias": xp.v_ind_kias if xp else "",
+                        "xp_v_true_ktas": xp.v_true_ktas if xp else "",
                         "px4_t_rx_ns": px.t_rx_ns if px else "",
                         "px4_time_boot_ms": px.time_boot_ms if px else "",
                         "px4_roll_deg": px.roll_deg if px else "",
@@ -1267,7 +1403,12 @@ def main() -> int:
                         "u_ail": u_ail,
                         "u_ele": u_ele,
                         "u_rud": u_rud,
-                        "throttle_cmd": float(args.throttle),
+                        "sp_speed_kt": sp_speed,
+                        "speed_source": str(args.speed_source),
+                        "speed_meas_kt": v_meas if v_meas is not None else "",
+                        "speed_pid_enabled": int(speed_pid_enabled),
+                        "u_thr": u_thr,
+                        "throttle_cmd": float(throttle_cmd),
                         "queue_depth": len(st.sent_queue),
                         "ack_total": ack_total,
                     }
@@ -1283,6 +1424,9 @@ def main() -> int:
                         break
 
             finally:
+                # Reset platform pose on exit of this run/repeat.
+                _send_neutral_pose_now()
+
                 # Write a lightweight integrity summary next to the logs.
                 integrity = {
                     "repeat_idx": rep_idx + 1,
@@ -1305,24 +1449,23 @@ def main() -> int:
                 except Exception:
                     pass
 
+                # Postprocess once files are closed.
+                try:
+                    _postprocess_run_dir(run_dir)
+                except Exception:
+                    pass
+
         return 0
 
     except KeyboardInterrupt:
-        pose = PoseCmd(
-                t_send_ns=t_tick,
-                x_mm=0.0,
-                y_mm=0.0,
-                z_mm=0.0,
-                roll_deg=0.0,
-                pitch_deg=0.0,
-                yaw_deg=0.0,
-            )
-        st.send_pose(pose)
-        st.close()
+        _send_neutral_pose_now()
         print("\n[hils_host] stopped.")
         return 0
     finally:
         try:
+            # Safety net: ensure platform pose reset even if we exited before per-run finally.
+            _send_neutral_pose_now()
+            st.close()
             xp_rx.close()
             if xp_tx is not None:
                 xp_tx.close()
