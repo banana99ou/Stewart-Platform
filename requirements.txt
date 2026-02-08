@@ -1,0 +1,11 @@
+# Core numerics
+numpy
+
+# Plotting (used by postprocess/figures scripts)
+matplotlib
+
+# Hardware / interfaces
+pyserial
+pymavlink
+
+
