@@ -66,8 +66,8 @@ X‑Plane은 roll/pitch와 heading을 제공하고, PX4는 roll/pitch/yaw를 제
 지연 지표의 정의는 다음과 같다.
 
 - **Serial RTT (ms)**: 호스트가 플랫폼에 포즈 명령을 전송한 시각(`t_tick_ns`)부터, 해당 명령에 대응하는 ACK가 호스트에 수신된 시각(`t_rx_ns`)까지의 시간.
-- **X‑Plane sample age at tick (ms)**: 제어 틱 시각(`t_tick_ns`)에서 최신 X‑Plane 상태가 수신된 시각(`xp_t_rx_ns`)이 얼마나 오래되었는지를 나타내는 값, \((t\\_tick\\_ns - xp\\_t\\_rx\\_ns)/10^6\).
-- **PX4 sample age at tick (ms)**: 제어 틱 시각(`t_tick_ns`)에서 최신 PX4 ATTITUDE가 수신된 시각(`px4_t_rx_ns`)의 경과 시간, \((t\\_tick\\_ns - px4\\_t\\_rx\\_ns)/10^6\).
+- **X‑Plane sample age at tick (ms)**: 제어 틱 시각(`t_tick_ns`)에서 최신 X‑Plane 상태가 수신된 시각(`xp_t_rx_ns`)이 얼마나 오래되었는지를 나타내는 값, ((t_tick_ns - xp_t_rx_ns)/10^6).
+- **PX4 sample age at tick (ms)**: 제어 틱 시각(`t_tick_ns`)에서 최신 PX4 ATTITUDE가 수신된 시각(`px4_t_rx_ns`)의 경과 시간, ((t_tick_ns - px4_t_rx_ns)/10^6).
 - **PX4 rx→ACK (ms)**: 제어 틱에서 사용된 최신 PX4 샘플 수신 시각(`px4_t_rx_ns`)부터, 해당 틱에서 전송된 포즈 명령의 ACK 수신 시각까지의 end-to-end proxy 지연.
 - **X‑Plane rx→ACK (ms)**: 제어 틱에서 사용된 최신 X‑Plane 샘플 수신 시각(`xp_t_rx_ns`)부터, 해당 틱에서 전송된 포즈 명령의 ACK 수신 시각까지의 end-to-end proxy 지연.
 
