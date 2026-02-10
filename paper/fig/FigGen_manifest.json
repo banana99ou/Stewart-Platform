@@ -1,0 +1,20 @@
+{
+  "hero_run": "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/logs/run-20260208-210808 #8",
+  "pref_fix_run": "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/logs/run-20260208-201951 #4",
+  "baseline_runs": [
+    "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/logs/run-20260208-202549 #5 (fix mounting)",
+    "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/logs/run-20260208-210113 #6",
+    "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/logs/run-20260208-210614 #7",
+    "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/logs/run-20260208-210808 #8",
+    "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/logs/run-20260208-211109 #9"
+  ],
+  "skip_first_s": 10.0,
+  "mounting_bias_pitch_deg_hero": 1.818472587855891,
+  "outputs": {
+    "Fig2": "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/paper/fig/Fig2_PitchResponse.png",
+    "Fig3": "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/paper/fig/Fig3_PitchError.png",
+    "Fig4": "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/paper/fig/Fig4_MountingBias_TimeSeries.png",
+    "Fig5a": "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/paper/fig/Fig5a_Latency_TimeSeries.png",
+    "Fig5b": "/Volumes/SHGP31-5/code/arduino stuff/Stewart-Platform/paper/fig/Fig5b_Latency_Distribution_Baseline.png"
+  }
+}
