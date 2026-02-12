@@ -382,6 +382,10 @@ def main() -> int:
     cmd_pitch = np.array([_to_float(r.get("cmd_pitch_deg")) for r in tick_rows], dtype=float)
     cmd_yaw = np.array([_to_float(r.get("cmd_yaw_deg")) for r in tick_rows], dtype=float)
 
+    # Scenario phase labels (optional; present for scenario runs in hils_host.py)
+    # Used for per-run mounting-bias estimation in a steady window (e.g., "hold_0").
+    scenario_phase = np.array([str(r.get("scenario_phase") or "").strip() for r in tick_rows], dtype=object)
+
     # Scenario setpoint (optional; present for trim-transition scenario runs)
     sp_pitch = np.array([_to_float(r.get("sp_pitch_deg")) for r in tick_rows], dtype=float)
     has_sp_pitch = bool(np.any(np.isfinite(sp_pitch)))
@@ -404,9 +408,68 @@ def main() -> int:
     has_px4 = bool(np.any(np.isfinite(px_roll)) or np.any(np.isfinite(px_pitch)) or np.any(np.isfinite(px_yaw)))
     has_xp = bool(np.any(np.isfinite(xp_roll)) or np.any(np.isfinite(xp_pitch)) or np.any(np.isfinite(xp_heading)))
 
+    # ---------------- Mounting bias (PX4 vs commanded platform pose) ----------------
+    #
+    # Motivation:
+    # - PX4 attitude is measured in the FC/IMU frame, which may have a fixed mounting offset
+    #   relative to the platform top-plate pose frame.
+    # - The most sane reference for this "mounting bias" is therefore the platform pose
+    #   (here: the commanded platform pose, since the platform is open-loop).
+    #
+    # Estimation strategy:
+    # - Use a steady scenario phase window (prefer "hold_0") within the analysis window.
+    # - Estimate constant roll/pitch offsets (deg) as mean(wrap(px4 - cmd)) over that window.
+    # - Emit both raw and bias-corrected tracking errors.
+    #
+    mounting_bias = None
+    px_roll_bc = px_roll
+    px_pitch_bc = px_pitch
+
+    has_phase = bool(np.any(np.array([p != "" for p in scenario_phase], dtype=bool)))
+    bias_window_mask = None
+    if has_phase:
+        bias_window_mask = analysis_mask & (scenario_phase == "hold_return")
+        # If pid_enabled is present, require it (avoids startup chaos / disabled control injection).
+        if has_pid_enabled:
+            bias_window_mask = bias_window_mask & np.isfinite(pid_enabled) & (pid_enabled > 0.5)
+
+    def _bias_stats(meas: np.ndarray, ref: np.ndarray, mask: Optional[np.ndarray]) -> dict[str, float]:
+        d = _wrap_deg(np.asarray(meas, dtype=float) - np.asarray(ref, dtype=float))
+        if mask is None:
+            finite = np.isfinite(d)
+        else:
+            finite = np.asarray(mask, dtype=bool) & np.isfinite(d)
+        n = int(np.count_nonzero(finite))
+        if n == 0:
+            nan = float("nan")
+            return {"n": 0.0, "mean": nan, "std": nan}
+        df = d[finite]
+        return {"n": float(n), "mean": float(np.mean(df)), "std": float(np.std(df))}
+
+    if has_px4:
+        roll_bias = _bias_stats(px_roll, cmd_roll, bias_window_mask)
+        pitch_bias = _bias_stats(px_pitch, cmd_pitch, bias_window_mask)
+        mounting_bias = {
+            "window": "hold_0" if (bias_window_mask is not None) else "all_finite",
+            "roll_deg": roll_bias,
+            "pitch_deg": pitch_bias,
+        }
+
+        # Bias-correct PX4 roll/pitch (wrap to [-180,180) while preserving NaNs).
+        rb = float(roll_bias.get("mean", float("nan")))
+        pb = float(pitch_bias.get("mean", float("nan")))
+        if np.isfinite(rb):
+            px_roll_bc = _wrap_deg(np.asarray(px_roll, dtype=float) - rb)
+        if np.isfinite(pb):
+            px_pitch_bc = _wrap_deg(np.asarray(px_pitch, dtype=float) - pb)
+
     if has_px4 and has_xp:
         err["roll_px4_minus_xp_deg"] = _diff(px_roll, xp_roll)
         err["pitch_px4_minus_xp_deg"] = _diff(px_pitch, xp_pitch)
+        # Bias-corrected (mounting-bias compensated) PX4 vs X-Plane, if bias was estimated.
+        if mounting_bias is not None:
+            err["roll_px4_biascorr_minus_xp_deg"] = _diff(px_roll_bc, xp_roll)
+            err["pitch_px4_biascorr_minus_xp_deg"] = _diff(px_pitch_bc, xp_pitch)
         # Yaw/heading: prefer bias-aligned yaw if available (eliminates constant offset).
         # - xp_heading_wrapped_deg: wrap180(sim heading) in [-180,180)
         # - px4_yaw_aligned_to_sim_deg: wrap180(px4 yaw after bias alignment)
@@ -431,6 +494,9 @@ def main() -> int:
     if has_px4:
         err["roll_px4_minus_cmd_deg"] = _diff(px_roll, cmd_roll)
         err["pitch_px4_minus_cmd_deg"] = _diff(px_pitch, cmd_pitch)
+        if mounting_bias is not None:
+            err["roll_px4_biascorr_minus_cmd_deg"] = _diff(px_roll_bc, cmd_roll)
+            err["pitch_px4_biascorr_minus_cmd_deg"] = _diff(px_pitch_bc, cmd_pitch)
         # Prefer bias-aligned yaw and compare in a sim-relative frame if possible.
         if np.any(np.isfinite(px4_yaw_aligned_to_sim)) and np.any(np.isfinite(xp_heading0_wrapped)):
             px4_yaw_rel = _wrap_deg(px4_yaw_aligned_to_sim - xp_heading0_wrapped)
@@ -618,6 +684,8 @@ def main() -> int:
             "n_tick_total": int(len(tick_rows)),
             "n_tick_used": int(np.count_nonzero(analysis_mask)),
         },
+        # Estimated from PX4 attitude vs commanded platform pose (cmd_*) in a steady window (prefer hold_0).
+        "mounting_bias_deg": mounting_bias,
         "saturation": sat_summary,
         "latency_ms": {
             "xplane_sample_age": _stats(xp_age_ms[analysis_mask]).__dict__,
@@ -680,6 +748,27 @@ def main() -> int:
             ax0.plot(t_plot, sp_pitch[plot_mask], linewidth=1.5, color="k", linestyle="--", label="setpoint pitch (deg)")
         if has_xp:
             ax0.plot(t_plot, xp_pitch[plot_mask], linewidth=1.2, color="tab:blue", label="X-Plane pitch (deg)")
+            # Apply mounting bias (estimated from PX4 vs commanded platform pose) to X-Plane pitch
+            # so that the sim trace is shown in the FC/IMU-attitude frame.
+            #
+            # Sign: mounting_bias_pitch_deg ≈ mean(px4_pitch - cmd_pitch) in hold_0.
+            # In the nominal region cmd_pitch ≈ xp_pitch, so px4_pitch ≈ xp_pitch + bias.
+            # Therefore, shift X-Plane by +bias to align with PX4.
+            if mounting_bias is not None:
+                try:
+                    pb = float(mounting_bias.get("pitch_deg", {}).get("mean", float("nan")))
+                except Exception:
+                    pb = float("nan")
+                if np.isfinite(pb):
+                    xp_pitch_bias = _wrap_deg(xp_pitch + pb)
+                    ax0.plot(
+                        t_plot,
+                        xp_pitch_bias[plot_mask],
+                        linewidth=1.2,
+                        color="tab:blue",
+                        linestyle=":",
+                        label=f"X-Plane pitch + mounting bias ({pb:+.2f} deg)",
+                    )
         if has_px4:
             ax0.plot(t_plot, px_pitch[plot_mask], linewidth=1.2, color="tab:orange", label="PX4 pitch (deg)")
         ax0.set_title("Pitch response (trim transition)")
