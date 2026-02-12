@@ -196,6 +196,10 @@ def load_run(run_dir: Path, *, skip_first_s: float) -> RunData:
 
 # ---------------- Plotting ----------------
 
+# Font size multiplier for Fig1, Fig2, Fig5b (2 = double)
+_FONT_SCALE = 1.7
+
+
 def _mpl():
     # Avoid GUI backend issues in headless runs
     os.environ.setdefault("MPLBACKEND", "Agg")
@@ -228,14 +232,15 @@ def fig2_pitch_response(run: RunData) -> Path:
             color="tab:blue",
             lw=1.2,
             ls=":",
-            label=f"X-Plane pitch + mounting bias ({pb:+.2f} deg)",
+            label=f"Fixed X-Plane pitch ({pb:+.2f} deg)",
         )
 
-    ax.set_title("Fig. 2. Trim transition: pitch response")
-    ax.set_xlabel("time (s) from run start")
-    ax.set_ylabel("pitch (deg)")
+    ax.set_title("Fig. 2. Trim transition: pitch response", fontsize=int(12 * _FONT_SCALE))
+    ax.set_xlabel("time (s) from run start", fontsize=int(10 * _FONT_SCALE))
+    ax.set_ylabel("pitch (deg)", fontsize=int(10 * _FONT_SCALE))
+    ax.tick_params(axis="both", labelsize=int(10 * _FONT_SCALE))
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best", fontsize=9)
+    ax.legend(loc="best", fontsize=int(9 * _FONT_SCALE))
     fig.tight_layout()
 
     out = OUT_DIR / "Fig2_PitchResponse.png"
@@ -343,8 +348,9 @@ def fig5_latency(run_hero: RunData, runs_baseline: list[RunData]) -> tuple[Path,
     labels = ["X-Plane sample age (ms)", "PX4 sample age (ms)", "Serial RTT (ms)"]
     # Matplotlib >=3.9 renamed "labels" -> "tick_labels"
     ax_b.boxplot(data, tick_labels=labels, showfliers=False)
-    ax_b.set_title("Fig. 5(b). Latency distributions (aggregate runs #5–#9)")
-    ax_b.set_ylabel("ms")
+    ax_b.set_title("Fig. 3. Latency distributions", fontsize=int(12 * _FONT_SCALE))
+    ax_b.set_ylabel("ms", fontsize=int(10 * _FONT_SCALE))
+    ax_b.tick_params(axis="both", labelsize=int(10 * _FONT_SCALE))
     ax_b.grid(True, axis="y", alpha=0.25)
     fig_b.tight_layout()
     out_b = OUT_DIR / "Fig5b_Latency_Distribution_Baseline.png"
