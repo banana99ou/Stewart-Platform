@@ -30,7 +30,7 @@ Priorities:
   - [ ] Estimate effective delay between X-Plane and PX4 attitude (e.g., cross-correlation) and compensate before computing stats
   - [ ] Report both “raw” and “aligned” error summary (at least in internal plots)
 - [ ] **Add per-run PX4:stewart mounting bias to Postprocessing_run.py**
-  - [ ] Estimate roll/pitch bias using the `hold_0` window (or another steady window) per run
+  - [ ] Estimate roll/pitch bias btw PX4 and platform pose using the `hold_0` window (or another steady window) per run
   - [ ] Report both raw and bias-corrected tracking metrics (mean/RMS/max/std)
 - [X] **Edit post-processing to show saturation statistics**
   - [X] % time saturated (sat flag)
@@ -130,4 +130,6 @@ Priorities:
   - [ ] “Near limit” indicator
   - [ ] Watchdog / update timeout indicator
   - [ ] Log flags into dataset
+- [ ] **Fix saturator
+ - [ ] use span instead of worst angle
 
