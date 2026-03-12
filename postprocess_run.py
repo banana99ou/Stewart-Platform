@@ -104,6 +104,29 @@ def _load_csv_rows(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in r]
 
 
+def _load_rx_times(path: Path) -> np.ndarray:
+    rows = _load_csv_rows(path)
+    if not rows:
+        return np.zeros(0, dtype=float)
+    out = np.array([_to_float(r.get("t_rx_ns")) for r in rows], dtype=float)
+    return out[np.isfinite(out)]
+
+
+def _project_latest_before(query_ns: np.ndarray, sample_ns: np.ndarray) -> np.ndarray:
+    """
+    Causal ZOH projection: for each query time, choose the latest sample at or before it.
+    """
+    q = np.asarray(query_ns, dtype=float)
+    if sample_ns.size == 0:
+        return np.full_like(q, np.nan, dtype=float)
+    s = np.sort(np.asarray(sample_ns, dtype=float))
+    idx = np.searchsorted(s, q, side="right") - 1
+    out = np.full_like(q, np.nan, dtype=float)
+    valid = idx >= 0
+    out[valid] = s[idx[valid]]
+    return out
+
+
 def _pick_latest_run_dir(logs_dir: Path) -> Path:
     if not logs_dir.exists():
         raise SystemExit(f"logs dir not found: {logs_dir}")
@@ -331,6 +354,8 @@ def main() -> int:
     tick_path = run_dir / "tick.csv"
     ack_path = run_dir / "stewart_ack.csv"
     meta_path = run_dir / "run_meta.json"
+    xp_path = run_dir / "xplane_att.csv"
+    px4_path = run_dir / "px4_att.csv"
 
     tick_rows = _load_csv_rows(tick_path)
     if not tick_rows:
@@ -340,6 +365,7 @@ def main() -> int:
     t_tick_ns = np.array([_to_float(r.get("t_tick_ns")) for r in tick_rows], dtype=float)
     t0 = float(t_tick_ns[np.isfinite(t_tick_ns)][0])
     t_s = (t_tick_ns - t0) / 1e9
+    tick_t_tick_ns_i = np.array([_to_int(r.get("t_tick_ns")) or 0 for r in tick_rows], dtype=np.int64)
 
     # Analysis window (ignore initial transient / chaos)
     skip_first_s = float(args.skip_first_s)
@@ -391,10 +417,17 @@ def main() -> int:
     has_sp_pitch = bool(np.any(np.isfinite(sp_pitch)))
 
     # Latency definitions (sample age at tick, ms)
-    xp_age_ms = (t_tick_ns - xp_t_rx_ns) / 1e6
-    px_age_ms = (t_tick_ns - px_t_rx_ns) / 1e6
-    xp_age_ms[~np.isfinite(xp_t_rx_ns)] = np.nan
-    px_age_ms[~np.isfinite(px_t_rx_ns)] = np.nan
+    # Reproject each stream causally onto the tick time axis to avoid negative
+    # sample-age artifacts caused by polling fresh inputs after stamping t_tick_ns.
+    xp_rx_independent_ns = _load_rx_times(xp_path)
+    px4_rx_independent_ns = _load_rx_times(px4_path)
+    xp_t_rx_ns_proj = _project_latest_before(t_tick_ns, xp_rx_independent_ns) if xp_rx_independent_ns.size > 0 else xp_t_rx_ns
+    px_t_rx_ns_proj = _project_latest_before(t_tick_ns, px4_rx_independent_ns) if px4_rx_independent_ns.size > 0 else px_t_rx_ns
+
+    xp_age_ms = (t_tick_ns - xp_t_rx_ns_proj) / 1e6
+    px_age_ms = (t_tick_ns - px_t_rx_ns_proj) / 1e6
+    xp_age_ms[~np.isfinite(xp_t_rx_ns_proj)] = np.nan
+    px_age_ms[~np.isfinite(px_t_rx_ns_proj)] = np.nan
 
     # Tracking errors (deg)
     # - Preferred: PX4 vs X-Plane (physical vs sim) if PX4 is present
@@ -542,7 +575,6 @@ def main() -> int:
             alpha_by_tick[k] = float(ack_alpha[i]) if np.isfinite(ack_alpha[i]) else float("nan")
             sat_by_tick[k] = float(ack_sat[i]) if np.isfinite(ack_sat[i]) else float("nan")
 
-        tick_t_tick_ns_i = np.array([_to_int(r.get("t_tick_ns")) or 0 for r in tick_rows], dtype=np.int64)
         tick_alpha = np.array([alpha_by_tick.get(int(tt), float("nan")) for tt in tick_t_tick_ns_i], dtype=float)
         tick_sat = np.array([sat_by_tick.get(int(tt), float("nan")) for tt in tick_t_tick_ns_i], dtype=float)
 
@@ -616,22 +648,20 @@ def main() -> int:
         }
 
         # End-to-end definition (host monotonic clock):
-        #   X-Plane/PX4 receive timestamp (latest sample used at tick)
+        #   X-Plane/PX4 receive timestamp causally projected to the tick
         #     -> ACK receive timestamp for the pose command sent at that tick.
         #
         # Join strategy:
-        # - tick.csv row has t_tick_ns and xp_t_rx_ns / px4_t_rx_ns (the latest sample held at that tick)
+        # - Reproject X-Plane/PX4 receive timestamps independently onto the tick
+        #   axis using latest-sample-at-or-before-tick (causal ZOH)
         # - stewart_ack.csv row has cmd_t_send_ns (PoseCmd.t_send_ns), which equals the tick's t_tick_ns
         #
         # Note: ACK pairing in host code is FIFO; this assumes 1 ACK per pose line and no reordering.
         # (cmd_t_send_ns already parsed above for saturation join)
-        # Build map: tick t_tick_ns -> latest rx times at that tick.
+        # Build map: tick t_tick_ns -> causally projected rx times at that tick.
         tick_by_t: dict[int, tuple[float, float]] = {}
-        for r in tick_rows:
-            tt = _to_int(r.get("t_tick_ns"))
-            if tt is None:
-                continue
-            tick_by_t[tt] = (_to_float(r.get("xp_t_rx_ns")), _to_float(r.get("px4_t_rx_ns")))
+        for tt, xp_rx_ns, px_rx_ns in zip(tick_t_tick_ns_i, xp_t_rx_ns_proj, px_t_rx_ns_proj, strict=False):
+            tick_by_t[int(tt)] = (float(xp_rx_ns), float(px_rx_ns))
 
         xp_rx_at_send = np.full_like(cmd_t_send_ns, np.nan, dtype=float)
         px4_rx_at_send = np.full_like(cmd_t_send_ns, np.nan, dtype=float)
@@ -683,6 +713,11 @@ def main() -> int:
             "has_pid_enabled": bool(has_pid_enabled),
             "n_tick_total": int(len(tick_rows)),
             "n_tick_used": int(np.count_nonzero(analysis_mask)),
+        },
+        "latency_alignment": {
+            "sample_age_method": "causal_latest_sample_before_tick",
+            "xplane_source": "xplane_att.csv" if xp_rx_independent_ns.size > 0 else "tick.csv",
+            "px4_source": "px4_att.csv" if px4_rx_independent_ns.size > 0 else "tick.csv",
         },
         # Estimated from PX4 attitude vs commanded platform pose (cmd_*) in a steady window (prefer hold_0).
         "mounting_bias_deg": mounting_bias,
