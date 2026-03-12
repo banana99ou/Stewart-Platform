@@ -964,20 +964,25 @@ def main() -> int:
     suffix = f"-{args.run_name.strip()}" if args.run_name.strip() else ""
     base_run_name = f"run-{session_stamp}{suffix}"
 
+    # Initialize listeners
     xp_rx = XPlaneReceiver(args.xplane_rx_host, int(args.xplane_rx_port))
     xp_tx = None if args.xplane_send == "none" else XPlaneSender(args.xplane_tx_host, int(args.xplane_tx_port), header_mode=str(args.xplane_tx_hdr))
     if xp_tx is not None and int(args.xplane_tx_dump_n) > 0:
         xp_tx.enable_packet_dump(int(args.xplane_tx_dump_n))
-    print(f"[hils_host] stewart_serial={args.stewart_com} baud={int(args.stewart_baud)}")
+    print(f"[hils_host] xplane_rx={args.xplane_rx_host}:{int(args.xplane_rx_port)} xplane_tx={args.xplane_tx_host}:{int(args.xplane_tx_port)} mode={args.xplane_send}")
+
+    # Start PX4 listener
+    px4 = None if args.no_px4 else Px4Mavlink(args.px4_com, int(args.px4_baud), float(args.px4_att_hz), args.px4_dialect)
     if args.no_px4:
         print("[hils_host] px4: disabled (--no-px4)")
     else:
         print(f"[hils_host] px4_serial={args.px4_com} baud={int(args.px4_baud)} att_hz={float(args.px4_att_hz)}")
-    print(f"[hils_host] xplane_rx={args.xplane_rx_host}:{int(args.xplane_rx_port)} xplane_tx={args.xplane_tx_host}:{int(args.xplane_tx_port)} mode={args.xplane_send}")
-
+    
+    # Start Stewart serial listener
     st = StewartSerial(args.stewart_com, int(args.stewart_baud), float(args.stewart_open_delay_s))
-    px4 = None if args.no_px4 else Px4Mavlink(args.px4_com, int(args.px4_baud), float(args.px4_att_hz), args.px4_dialect)
-
+    print(f"[hils_host] stewart_serial={args.stewart_com} baud={int(args.stewart_baud)}")
+    
+    # Initialize PID controllers
     pid_roll = PID(args.kp_roll, args.ki_roll, args.kd_roll, args.i_limit, args.u_limit) if px4 is not None else None
     pid_pitch = PID(args.kp_pitch, args.ki_pitch, args.kd_pitch, args.i_limit, args.u_limit) if px4 is not None else None
     pid_yaw = PID(args.kp_yaw, args.ki_yaw, args.kd_yaw, args.i_limit, args.u_limit) if px4 is not None else None
@@ -991,8 +996,7 @@ def main() -> int:
 
     def _send_neutral_pose_now() -> None:
         """
-        Best-effort "reset platform pose" for shutdown.
-        Uses z_mm=0 to match the existing Ctrl+C behavior in this script.
+        reset platform pose for shutdown.
         """
         try:
             pose = PoseCmd(
