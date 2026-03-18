@@ -223,7 +223,7 @@ p.alignment = PP_ALIGN.CENTER
 p.line_spacing = Pt(68)
 
 _p(tf, "Using a Stewart Platform with X-Plane and PX4", 22, GREY, sp=Pt(24), align=PP_ALIGN.CENTER)
-_ko(tf, "\uc2a4\ud29c\uc5b4\ud2b8 \ud50c\ub7ab\ud3fc \u00b7 X-Plane \u00b7 PX4 \uc5f0\ub3d9 \uae30\ubc18 \ube44\ud589\uccb4 \uc790\uc138\uc81c\uc5b4 \uac80\uc99d",
+_ko(tf, "스튜어트 플랫폼 · X-Plane · PX4 연동 기반 비행체 자세제어 검증",
     18, Pt(6), PP_ALIGN.CENTER)
 
 tb = _tb(sl, Inches(2), Inches(7.0), Inches(16), Inches(1.0))
@@ -248,8 +248,6 @@ sl = make_slide(prs, blank)
 slide_title(sl, "Why Add Physical Motion to HILS?")
 
 ko_tb = _tb(sl, PL, Inches(2.65), PW, Inches(0.5))
-_set(ko_tb, "\uc65c HILS\uc5d0 \ubb3c\ub9ac\uc801 \ubaa8\uc158\uc774 \ud544\uc694\ud55c\uac00?",
-     16, KO_GREY, align=PP_ALIGN.CENTER)
 
 col_w = Inches(7.5)
 col_top = Inches(3.4)
@@ -265,12 +263,11 @@ p.text = "Conventional HILS"
 p.font.size = Pt(28)
 p.font.color.rgb = BLUE
 p.font.bold = True
-_ko(ltf, "\uae30\uc874 HILS", 16)
 for en, kr in [
-    ("Simulator computes dynamics", "\uc2dc\ubbac\ub808\uc774\ud130\uac00 \ub3d9\uc5ed\ud559 \uacc4\uc0b0"),
-    ("Controller receives synthetic sensor signals", "\ud569\uc131 \uc13c\uc11c \uc2e0\ud638 \uc218\uc2e0"),
-    ("Attitude evaluated via logs / screens", "\ub85c\uadf8/\ud654\uba74\uc73c\ub85c\ub9cc \uc790\uc138 \ud655\uc778"),
-    ("IMU does not experience real motion", "IMU\uac00 \uc2e4\uc81c \uad00\uc131 \uc6b4\ub3d9 \ubbf8\uacbd\ud5d8"),
+    ("Simulator computes dynamics", "시뮬레이터가 동역학 계산"),
+    ("Controller receives synthetic sensor signals", "합성 센서 신호 수신"),
+    ("Attitude evaluated via logs / screens", "로그/화면으로만 자세 확인"),
+    ("IMU does not experience real motion", "IMU가 실제 관성 운동 미경험"),
 ]:
     _bullet(ltf, en, kr, 20, Pt(14))
 
@@ -283,12 +280,11 @@ p.text = "This Work"
 p.font.size = Pt(28)
 p.font.color.rgb = BLUE
 p.font.bold = True
-_ko(rtf, "\ubcf8 \uc5f0\uad6c", 16)
 for en, kr in [
-    ("Simulator drives real Stewart platform motion", "\uc2e4\uc81c \ud50c\ub7ab\ud3fc \ubaa8\uc158 \uad6c\ub3d9"),
-    ("PX4 IMU senses real inertial excitation", "PX4 IMU \uc2e4\uc81c \uad00\uc131 \uc790\uadf9 \uac10\uc9c0"),
-    ("Measured attitude fed back into loop", "\uce21\uc815 \uc790\uc138 \u2192 \uc81c\uc5b4 \ub8e8\ud504 \ud53c\ub4dc\ubc31"),
-    ("Timing and fidelity measured", "\ud0c0\uc774\ubc0d\u00b7\ucda9\uc2e4\ub3c4 \uc815\ub7c9 \uce21\uc815"),
+    ("Simulator drives real Stewart platform motion", "실제 플랫폼 모션 구동"),
+    ("PX4 IMU senses real inertial excitation", "PX4 IMU 실제 관성 자극 감지"),
+    ("Measured attitude fed back into loop", "측정 자세 → 제어 루프 피드백"),
+    ("Timing and fidelity measured", "타이밍·충실도 정량 측정"),
 ]:
     _bullet(rtf, en, kr, 20, Pt(14))
 
@@ -320,7 +316,7 @@ p.text = ("Closed-loop feedback uses attitude estimated from real IMU motion, "
 p.font.size = Pt(22)
 p.font.color.rgb = DARK
 p.alignment = PP_ALIGN.CENTER
-_ko(tf, "\ud3d0\ub8e8\ud504 \ud53c\ub4dc\ubc31\uc774 \uc2e4\uc81c IMU \uc6b4\ub3d9\uc73c\ub85c\ubd80\ud130 \ucd94\uc815\ub41c \uc790\uc138\ub97c \uc0ac\uc6a9",
+_ko(tf, "폐루프 피드백이 실제 IMU 운동으로부터 추정된 자세를 사용",
     16, Pt(6), PP_ALIGN.CENTER)
 
 bw = Inches(5.0)
@@ -330,15 +326,15 @@ gap = Inches(0.5)
 bxs = [Inches(1.5), Inches(1.5) + bw + gap, Inches(1.5) + 2 * (bw + gap)]
 
 labels = [
-    ("01", "Realized Motion", "\ubaa8\uc158 \uad6c\ud604",
+    ("01", "Realized Motion", "모션 구현",
      "Simulator attitude is converted\ninto Stewart-platform motion.",
-     "\uc2dc\ubbac\ub808\uc774\ud130 \uc790\uc138 \u2192 \ud50c\ub7ab\ud3fc \ubaa8\uc158"),
-    ("02", "Physical Sensing", "\ubb3c\ub9ac\uc801 \uc13c\uc2f1",
+     "시뮬레이터 자세 → 플랫폼 모션"),
+    ("02", "Physical Sensing", "물리적 센싱",
      "PX4 IMU and estimator respond\nto real inertial excitation.",
-     "PX4 IMU\uac00 \uc2e4\uc81c \uad00\uc131 \uc790\uadf9\uc5d0 \ubc18\uc751"),
-    ("03", "Closed-Loop Return", "\ud3d0\ub8e8\ud504 \uadc0\ud658",
+     "PX4 IMU가 실제 관성 자극에 반응"),
+    ("03", "Closed-Loop Return", "폐루프 귀환",
      "Measured attitude is sent back\ninto the host control loop.",
-     "\uce21\uc815 \uc790\uc138 \u2192 \ud638\uc2a4\ud2b8 \uc81c\uc5b4 \ub8e8\ud504"),
+     "측정 자세 → 호스트 제어 루프"),
 ]
 
 for i, (num, t_en, t_kr, d_en, d_kr) in enumerate(labels):
@@ -391,7 +387,7 @@ photo.text_frame.word_wrap = True
 photo.text_frame.margin_top = Inches(2.0)
 photo.text_frame.margin_left = Pt(20)
 _set(photo, "[Insert hardware photo]", 22, GREY, align=PP_ALIGN.CENTER)
-_ko(photo.text_frame, "\uc2a4\ud29c\uc5b4\ud2b8 \ud50c\ub7ab\ud3fc + PX4 \ud0d1\uc7ac \uc0ac\uc9c4",
+_ko(photo.text_frame, "스튜어트 플랫폼 + PX4 탑재 사진",
     16, Pt(8), PP_ALIGN.CENTER)
 
 video = _rr(sl, Inches(10.5), Inches(3.4), pw, ph, LIGHT, GREY)
@@ -399,7 +395,7 @@ video.text_frame.word_wrap = True
 video.text_frame.margin_top = Inches(2.0)
 video.text_frame.margin_left = Pt(20)
 _set(video, "[Insert demo video]", 22, GREY, align=PP_ALIGN.CENTER)
-_ko(video.text_frame, "Trim transition \uc2dc\ub098\ub9ac\uc624 \uad6c\ub3d9 \uc601\uc0c1",
+_ko(video.text_frame, "Trim transition 시나리오 구동 영상",
     16, Pt(8), PP_ALIGN.CENTER)
 
 _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
@@ -436,13 +432,13 @@ callout_x = Inches(12.2)
 callout_top = Inches(3.4)
 steps = [
     ("1", "X-Plane publishes vehicle state\nto the Python host over UDP.",
-     "X-Plane \u2192 UDP \u2192 Python \ud638\uc2a4\ud2b8"),
+     "X-Plane → UDP → Python 호스트"),
     ("2", "Host converts state to pose\ncommands for the Stewart platform.",
-     "\ud638\uc2a4\ud2b8 \u2192 pose \uba85\ub839 \u2192 \uc2a4\ud29c\uc5b4\ud2b8 \ud50c\ub7ab\ud3fc"),
+     "호스트 → pose 명령 → 스튜어트 플랫폼"),
     ("3", "PX4 physically senses platform\nmotion through its onboard IMU.",
-     "PX4 IMU\uac00 \ud50c\ub7ab\ud3fc \ubaa8\uc158\uc744 \ubb3c\ub9ac\uc801\uc73c\ub85c \uac10\uc9c0"),
+     "PX4 IMU가 플랫폼 모션을 물리적으로 감지"),
     ("4", "PX4 attitude returns to host;\nhost injects control into X-Plane.",
-     "PX4 \uc790\uc138 \u2192 \ud638\uc2a4\ud2b8 \u2192 X-Plane \uc81c\uc5b4 \uc8fc\uc785"),
+     "PX4 자세 → 호스트 → X-Plane 제어 주입"),
 ]
 for i, (num, en, kr) in enumerate(steps):
     y = callout_top + Inches(i * 1.7)
@@ -495,18 +491,18 @@ p.text = "Baseline Scenario"
 p.font.size = Pt(26)
 p.font.color.rgb = BLUE
 p.font.bold = True
-_ko(ltf, "\uae30\ubcf8 \uc2e4\ud5d8 \uc2dc\ub098\ub9ac\uc624", 16)
+_ko(ltf, "기본 실험 시나리오", 16)
 _p(ltf, "Pitch trim transition:", 22, DARK, True, Pt(18))
 _p(ltf, "0\u00b0 \u2192 +5\u00b0 \u2192 hold \u2192 0\u00b0", 26, BLUE, True, Pt(6))
 _p(ltf, "", 8, sp=Pt(8))
 _bullet(ltf, "Same initial condition each run",
-        "\ub9e4 \uc2e4\ud5d8 \ub3d9\uc77c \ucd08\uae30 \uc870\uac74", 18, Pt(10))
+        "매 실험 동일 초기 조건", 18, Pt(10))
 _bullet(ltf, "Repeated for statistics",
-        "\ud1b5\uacc4 \ud655\ubcf4\ub97c \uc704\ud574 \ubc18\ubcf5 \uc218\ud589", 18, Pt(10))
+        "통계 확보를 위해 반복 수행", 18, Pt(10))
 _bullet(ltf, "Neutral at z=+20 mm (max rotation)",
-        "z=+20 mm \uae30\ubcf8 \uc790\uc138 (\ud68c\uc804 \ubc94\uc704 \uadf9\ub300\ud654)", 18, Pt(10))
+        "z=+20 mm 기본 자세 (회전 범위 극대화)", 18, Pt(10))
 _bullet(ltf, "Stays inside workspace",
-        "\uc791\uc5c5 \uc601\uc5ed \ub0b4 \uc815\uc0c1 \uac70\ub3d9", 18, Pt(10))
+        "작업 영역 내 정상 거동", 18, Pt(10))
 
 div = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(9.85), Inches(3.6), Pt(2), Inches(5.4))
 div.fill.solid()
@@ -521,23 +517,23 @@ p.text = "Logged Signals"
 p.font.size = Pt(26)
 p.font.color.rgb = BLUE
 p.font.bold = True
-_ko(rtf, "\uae30\ub85d \uc2e0\ud638", 16)
+_ko(rtf, "기록 신호", 16)
 for en, kr in [
-    ("X-Plane attitude", "X-Plane \uc790\uc138"),
-    ("PX4 attitude estimate", "PX4 \uc790\uc138 \ucd94\uc815\uac12"),
-    ("Platform pose command", "\ud50c\ub7ab\ud3fc pose \uba85\ub839"),
-    ("ACK timing + host timestamps", "ACK \ud0c0\uc774\ubc0d \ubc0f \ud0c0\uc784\uc2a4\ud0ec\ud504"),
+    ("X-Plane attitude", "X-Plane 자세"),
+    ("PX4 attitude estimate", "PX4 자세 추정값"),
+    ("Platform pose command", "플랫폼 pose 명령"),
+    ("ACK timing + host timestamps", "ACK 타이밍 및 타임스탬프"),
 ]:
     _bullet(rtf, en, kr, 20, Pt(10))
 
 _p(rtf, "", 8, sp=Pt(14))
 _p(rtf, "Extracted Metrics", 24, BLUE, True, Pt(6))
-_ko(rtf, "\ucd94\ucd9c \uba54\ud2b8\ub9ad", 15)
+_ko(rtf, "추출 메트릭", 15)
 for en, kr in [
-    ("Tracking error (raw)", "\ucd94\uc885 \uc624\ucc28 (\uc6d0\uc2dc)"),
-    ("Bias-corrected tracking error", "\ubc14\uc774\uc5b4\uc2a4 \ubcf4\uc815 \ucd94\uc885 \uc624\ucc28"),
+    ("Tracking error (raw)", "추종 오차 (원시)"),
+    ("Bias-corrected tracking error", "바이어스 보정 추종 오차"),
     ("Sample age", None),
-    ("Serial RTT / end-to-end delay", "\uc885\ub2e8\uac04 \uc9c0\uc5f0"),
+    ("Serial RTT / end-to-end delay", "종단간 지연"),
 ]:
     _bullet(rtf, en, kr, 20, Pt(8))
 
@@ -561,11 +557,11 @@ p = atf.paragraphs[0]
 p.text = "PX4 follows the step response with consistent phase lag."
 p.font.size = Pt(20)
 p.font.color.rgb = DARK
-_ko(atf, "\uc77c\uad00\ub41c \uc704\uc0c1 \uc9c0\uc5f0\uc73c\ub85c \uc2a4\ud15d \uc751\ub2f5 \ucd94\uc885", 14, Pt(8))
+_ko(atf, "일관된 위상 지연으로 스텝 응답 추종", 14, Pt(8))
 
 _p(atf, "", 8, sp=Pt(16))
 _p(atf, "Residual offset is structured \u2014\nexplainable bias, not instability.", 20, DARK, sp=Pt(4))
-_ko(atf, "\uc794\uc5ec \uc624\ud504\uc14b: \ubd88\uc548\uc815\uc774 \uc544\ub2cc \uc124\uba85 \uac00\ub2a5\ud55c \ubc14\uc774\uc5b4\uc2a4", 14, Pt(8))
+_ko(atf, "잔여 오프셋: 불안정이 아닌 설명 가능한 바이어스", 14, Pt(8))
 
 _callout(sl, Inches(2.67), Inches(8.5), Inches(14.66), Inches(1.2),
          "The platform reproduces commanded attitude transitions well enough "
@@ -663,13 +659,13 @@ gy1 = Inches(3.4)
 gy2 = Inches(6.4)
 
 limits = [
-    ("Finite Workspace", "\uc720\ud55c\ud55c \uc791\uc5c5 \uc601\uc5ed",
+    ("Finite Workspace", "유한한 작업 영역",
      "Large multi-axis commands reduce\nthe feasible operating region."),
-    ("No Physical Aerodynamic Load", "\uacf5\ub825 \ud558\uc911 \ubbf8\uc7ac\ud604",
+    ("No Physical Aerodynamic Load", "공력 하중 미재현",
      "The platform reproduces motion cues,\nnot full external-force physics."),
-    ("Platform-Level Actuation Limits", "\ud50c\ub7ab\ud3fc \uad6c\ub3d9 \ud55c\uacc4",
+    ("Platform-Level Actuation Limits", "플랫폼 구동 한계",
      "Timing, hysteresis, and actuator\nconstraints shape response fidelity."),
-    ("Not a Flight Replacement", "\ube44\ud589 \ub300\uccb4 \ubd88\uac00",
+    ("Not a Flight Replacement", "비행 대체 불가",
      "This platform complements conventional\nHILS and real flight testing."),
 ]
 
@@ -726,15 +722,15 @@ p.text = "Key Results"
 p.font.size = Pt(26)
 p.font.color.rgb = BLUE
 p.font.bold = True
-_ko(ltf, "\uc8fc\uc694 \uc131\uacfc", 16)
+_ko(ltf, "주요 성과", 16)
 
 takeaways = [
     ("Physically closed-loop HILS architecture\nimplemented: X-Plane + Stewart + PX4.",
-     "\ubb3c\ub9ac\uc801 \ud3d0\ub8e8\ud504 HILS \uc544\ud0a4\ud14d\ucc98 \uad6c\ud604"),
+     "물리적 폐루프 HILS 아키텍처 구현"),
     ("Closed-loop attitude tracking achieved\nand evaluated quantitatively.",
-     "\ud3d0\ub8e8\ud504 \uc790\uc138 \ucd94\uc885 \ub2ec\uc131 \ubc0f \uc815\ub7c9 \ud3c9\uac00"),
+     "폐루프 자세 추종 달성 및 정량 평가"),
     ("Bias and latency are measured and used\nto define the platform's true fidelity.",
-     "\ubc14\uc774\uc5b4\uc2a4\u00b7\uc9c0\uc5f0 \uce21\uc815\uc73c\ub85c \uc2e4\uc81c \ucda9\uc2e4\ub3c4 \uc815\uc758"),
+     "바이어스·지연 측정으로 실제 충실도 정의"),
 ]
 for i, (en, kr) in enumerate(takeaways):
     _p(ltf, f"{i + 1}.  {en}", 18, DARK, sp=Pt(16))
@@ -753,14 +749,14 @@ p.text = "Next Steps"
 p.font.size = Pt(26)
 p.font.color.rgb = BLUE
 p.font.bold = True
-_ko(rtf, "\ud5a5\ud6c4 \uacfc\uc81c", 16)
+_ko(rtf, "향후 과제", 16)
 
 for en, kr in [
-    ("Time-aligned error analysis", "\uc2dc\uac04 \uc815\ub82c \uae30\ubc18 \uc624\ucc28 \ubd84\uc11d"),
+    ("Time-aligned error analysis", "시간 정렬 기반 오차 분석"),
     ("Repeatability / hysteresis\ncharacterization",
-     "\ubc18\ubcf5\uc131\u00b7\ud788\uc2a4\ud14c\ub9ac\uc2dc\uc2a4 \ud2b9\uc131 \ubd84\uc11d"),
+     "반복성·히스테리시스 특성 분석"),
     ("Stress tests near workspace\nand saturation limits",
-     "\uc791\uc5c5 \uc601\uc5ed\u00b7\ud3ec\ud654 \ud55c\uacc4 \uc2a4\ud2b8\ub808\uc2a4 \uc2dc\ud5d8"),
+     "작업 영역·포화 한계 스트레스 시험"),
 ]:
     _p(rtf, f"\u2192  {en}", 18, DARK, sp=Pt(16))
     _ko(rtf, f"    {kr}", 14)
