@@ -61,6 +61,7 @@ def _mpl():
     plt.rcParams.update({
         "font.family": "sans-serif",
         "font.sans-serif": [FONT_NAME, "NanumSquare", "DejaVu Sans"],
+        "axes.unicode_minus": False,
         "font.size": 14,
         "axes.labelsize": 14,
         "axes.titlesize": 14,
@@ -89,8 +90,8 @@ def fig2_pitch_response(run: RunData) -> Path:
     if np.any(np.isfinite(sp)):
         ax.plot(t[m], sp[m], "k--", lw=1.5, label="setpoint pitch (deg)")
 
-    ax.plot(t[m], run.xp_pitch[m], color="tab:blue", lw=1.2,
-            label="X-Plane pitch (deg)")
+    ax.plot(t[m], run.xp_pitch[m], color="tab:blue", lw=1.2, ls=":",
+            label="X-Plane pitch raw (deg)")
     ax.plot(t[m], run.px4_pitch[m], color="tab:orange", lw=1.2,
             label="PX4 pitch (deg)")
 
@@ -99,8 +100,8 @@ def fig2_pitch_response(run: RunData) -> Path:
         ax.plot(
             t[m],
             _wrap_deg(run.xp_pitch + pb)[m],
-            color="tab:blue", lw=1.2, ls=":",
-            label=f"Fixed X-Plane pitch ({pb:+.2f}\u00b0)",
+            color="tab:blue", lw=1.2,
+            label=f"X-Plane pitch fixed ({pb:+.2f}\u00b0)",
         )
 
     ax.set_xlabel("time (s) from run start")
@@ -124,7 +125,7 @@ def fig3_pitch_error(run: RunData) -> Path:
 
     err_raw = _wrap_deg(run.px4_pitch - run.xp_pitch)
     ax.plot(t[m], err_raw[m], color="tab:red", lw=1.2,
-            label="raw error: PX4 \u2212 X-Plane (deg)")
+            label="raw error (deg)")
 
     pb = run.mount_bias_pitch_deg
     if np.isfinite(pb):
@@ -151,18 +152,17 @@ def fig4_mounting_bias_timeseries(pref: RunData, hero: RunData) -> Path:
                              sharex=False, sharey=True)
 
     for ax, run, subtitle in [
-        (axes[0], pref, "pre-fix run (loose mounting)"),
-        (axes[1], hero, "baseline hero run (firm mounting)"),
+        (axes[0], pref, "Loose mounting"),
+        (axes[1], hero, "Firm mounting"),
     ]:
         t = run.t_s
         m = run.analysis_mask
         bias_ts = _wrap_deg(run.px4_pitch - run.cmd_pitch)
-        ax.plot(t[m], bias_ts[m], lw=1.1, color="tab:purple",
-                label="wrap(PX4 pitch \u2212 cmd pitch)")
         pb = run.mount_bias_pitch_deg
+        bias_lbl = f"PX4 - cmd pitch (mean {pb:+.2f}\u00b0)" if np.isfinite(pb) else "PX4 - cmd pitch"
+        ax.plot(t[m], bias_ts[m], lw=1.1, color="tab:purple", label=bias_lbl)
         if np.isfinite(pb):
-            ax.axhline(pb, color="k", lw=1.0, alpha=0.35,
-                       label=f"mean in hold_0: {pb:+.2f}\u00b0")
+            ax.axhline(pb, color="k", lw=1.0, alpha=0.35)
         ax.set_ylabel("deg")
         ax.grid(True, alpha=0.3)
         ax.set_title(subtitle)
