@@ -11,6 +11,9 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 FIG = os.path.join(BASE, "fig")
 TEMPLATE = os.path.join(BASE, "template.pptx")
 
+# Use a Korean-capable font for all generated text.
+FONT_NAME = "Nanum Square"
+
 # ── Colors (from template: grey bg, white panel, blue+black text) ───
 
 BG_GREY = RGBColor(0xDC, 0xDC, 0xDC)
@@ -56,17 +59,29 @@ def _rr(sl, l, t, w, h, fill, line=None):
     return s
 
 
-def _rect(sl, l, t, w, h, fill):
-    s = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, l, t, w, h)
+def _rounded_rect(sl, l, t, w, h, fill, line=None):
+    s = sl.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, l, t, w, h)
     s.fill.solid()
     s.fill.fore_color.rgb = fill
-    s.line.fill.background()
+    if line:
+        s.line.color.rgb = line
+        s.line.width = Pt(1)
+    else:
+        s.line.fill.background()
     s.shadow.inherit = False
     return s
 
 
 def _tb(sl, l, t, w, h):
-    return sl.shapes.add_textbox(l, t, w, h)
+    tb = sl.shapes.add_textbox(l, t, w, h)
+    # Set default font on the first paragraph so direct `p = ...paragraphs[0]`
+    # formatting later inherits the same font.
+    try:
+        p0 = tb.text_frame.paragraphs[0]
+        p0.font.name = FONT_NAME
+    except Exception:
+        pass
+    return tb
 
 
 def _set(shape, text, sz=22, color=DARK, bold=False, align=PP_ALIGN.LEFT):
@@ -76,6 +91,7 @@ def _set(shape, text, sz=22, color=DARK, bold=False, align=PP_ALIGN.LEFT):
     p = tf.paragraphs[0]
     p.text = text
     p.font.size = Pt(sz)
+    p.font.name = FONT_NAME
     p.font.color.rgb = color
     p.font.bold = bold
     p.alignment = align
@@ -86,6 +102,7 @@ def _p(tf, text, sz=22, color=DARK, bold=False, sp=Pt(8), align=PP_ALIGN.LEFT):
     p = tf.add_paragraph()
     p.text = text
     p.font.size = Pt(sz)
+    p.font.name = FONT_NAME
     p.font.color.rgb = color
     p.font.bold = bold
     p.space_before = sp
@@ -106,6 +123,7 @@ def _bullet(tf, en, kr=None, sz=20, sp=Pt(10)):
 def _img(sl, path, l, t, width=None, height=None):
     if os.path.exists(path):
         return sl.shapes.add_picture(path, l, t, width, height)
+    print("path not found", path)
     box = _rr(sl, l, t, width or Inches(6), height or Inches(4), LIGHT, GREY)
     _set(box, f"[{os.path.basename(path)}]", 18, GREY, align=PP_ALIGN.CENTER)
     return box
@@ -165,7 +183,7 @@ def slide_title(sl, text, y=PT_):
 
 def _callout(sl, l, t, w, h, text, sz=18):
     """Template-style #EAF3FF rounded callout box with bold text."""
-    box = _rr(sl, l, t, w, h, HEADER_PALE)
+    box = _rounded_rect(sl, l, t, w, h, HEADER_PALE)
     box.shadow.inherit = False
     tb = _tb(sl, l + Inches(0.4), t + Inches(0.4), w - Inches(0.8), h - Inches(0.3))
     tf = tb.text_frame
@@ -175,13 +193,13 @@ def _callout(sl, l, t, w, h, text, sz=18):
     p.font.size = Pt(sz)
     p.font.color.rgb = BLACK
     p.font.bold = True
-    p.alignment = PP_ALIGN.LEFT
+    p.alignment = PP_ALIGN.CENTER
     return tf
 
 
 def _card(sl, l, t, w, h, fill=F2F2):
     """Template-style #F2F2F2 rounded card background."""
-    c = _rr(sl, l, t, w, h, fill)
+    c = _rounded_rect(sl, l, t, w, h, fill)
     c.shadow.inherit = False
     return c
 
@@ -295,7 +313,7 @@ div.fill.fore_color.rgb = BLUE
 div.line.fill.background()
 
 # bottom callout
-_callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),"Can a physically closed loop remain stable, repeatable, and quantitatively explainable?", 20)
+_callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),"물리적 피드백 포함 HILS 구조의 안정성, 반복성, 정량적 설명 가능성 제시", 20)
 
 _sn(sl, 2)
 
@@ -311,19 +329,20 @@ ctb = _tb(sl, Inches(2), Inches(3.2), Inches(16), Inches(1.2))
 tf = ctb.text_frame
 tf.word_wrap = True
 p = tf.paragraphs[0]
-p.text = ("Closed-loop feedback uses attitude estimated from real IMU motion, "
-          "not only simulated sensor values.")
+p.text = ("시뮬레이션 센서 값뿐만 아니라 실제 IMU 모션 기반 자세 추정치를 폐루프 피드백 입력으로 활용")
 p.font.size = Pt(22)
 p.font.color.rgb = DARK
+p.font.bold = True
 p.alignment = PP_ALIGN.CENTER
-_ko(tf, "폐루프 피드백이 실제 IMU 운동으로부터 추정된 자세를 사용",
-    16, Pt(6), PP_ALIGN.CENTER)
 
 bw = Inches(5.0)
 bh = Inches(3.2)
 btop = Inches(4.8)
 gap = Inches(0.5)
-bxs = [Inches(1.5), Inches(1.5) + bw + gap, Inches(1.5) + 2 * (bw + gap)]
+
+total_w = 3 * bw + 2 * gap
+left = (prs.slide_width - total_w) // 2
+bxs = [left + i * (bw + gap) for i in range(3)]
 
 labels = [
     ("01", "Realized Motion", "모션 구현",
@@ -334,7 +353,7 @@ labels = [
      "PX4 IMU가 실제 관성 자극에 반응"),
     ("03", "Closed-Loop Return", "폐루프 귀환",
      "Measured attitude is sent back\ninto the host control loop.",
-     "측정 자세 → 호스트 제어 루프"),
+     "측정된 자세 → 호스트 제어 루프"),
 ]
 
 for i, (num, t_en, t_kr, d_en, d_kr) in enumerate(labels):
@@ -356,7 +375,7 @@ for i, (num, t_en, t_kr, d_en, d_kr) in enumerate(labels):
     p.font.bold = True
     p.alignment = PP_ALIGN.CENTER
 
-    dtb = _tb(sl, x, btop + Inches(1.2), bw, Inches(1.8))
+    dtb = _tb(sl, x, btop + Inches(1.1), bw, Inches(1.8))
     dtf = dtb.text_frame
     dtf.word_wrap = True
     p = dtf.paragraphs[0]
@@ -366,9 +385,10 @@ for i, (num, t_en, t_kr, d_en, d_kr) in enumerate(labels):
     p.alignment = PP_ALIGN.CENTER
     _ko(dtf, d_kr, 14, Pt(8), PP_ALIGN.CENTER)
 
-_callout(sl, Inches(2.67), Inches(8.5), Inches(14.66), Inches(1.2),
-         "Complementary validation layer \u2014 "
-         "not a full aerodynamic flight replacement.", 18)
+_callout(
+    sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
+    "\u26A0\uFE0F 연구 목적상 폐루프 성능 중심으로 설계되었으며, 전 영역 공력 효과는 포함하지 않습니다.", 20
+)
 
 _sn(sl, 3)
 
@@ -413,15 +433,15 @@ sl = make_slide(prs, blank)
 slide_title(sl, "How the Physical Closed Loop Works")
 
 fig1 = os.path.join(FIG, "Fig1_Architecture.png")
-fig_left = Inches(1.0)
+fig_left = Inches(2.7)
 fig_top = Inches(3.4)
-pic = _img(sl, fig1, fig_left, fig_top, height=Cm(15.12))
+pic = _img(sl, fig1, fig_left, fig_top, height=Cm(13.0))
 
 IMG_W_PX = 1646
 img_w_in = _emu_to_in(pic.width) if hasattr(pic, "width") and pic.width else 10.5
 px_per_inch = IMG_W_PX / img_w_in
 cd = Inches(0.55)
-for num, px_x, px_y in [(1, 170, 240), (2, 100, 580), (3, 700, 850), (4, 1480, 560)]:
+for num, px_x, px_y in [(1, 190, 180), (2, 190, 555), (3, 730, 850), (4, 1420, 555)]:
     cx = fig_left + Inches(px_x / px_per_inch) - cd / 2
     cy = fig_top + Inches(px_y / px_per_inch) - cd / 2
     c = _circle(sl, cx, cy, cd, RED, str(num), WHITE, 20)
@@ -431,17 +451,13 @@ for num, px_x, px_y in [(1, 170, 240), (2, 100, 580), (3, 700, 850), (4, 1480, 5
 callout_x = Inches(12.2)
 callout_top = Inches(3.4)
 steps = [
-    ("1", "X-Plane publishes vehicle state\nto the Python host over UDP.",
-     "X-Plane → UDP → Python 호스트"),
-    ("2", "Host converts state to pose\ncommands for the Stewart platform.",
-     "호스트 → pose 명령 → 스튜어트 플랫폼"),
-    ("3", "PX4 physically senses platform\nmotion through its onboard IMU.",
-     "PX4 IMU가 플랫폼 모션을 물리적으로 감지"),
-    ("4", "PX4 attitude returns to host;\nhost injects control into X-Plane.",
-     "PX4 자세 → 호스트 → X-Plane 제어 주입"),
+    ("1", "X-Plane publishes vehicle state\nto the Python host over UDP."),
+    ("2", "Host converts state to pose\ncommands for the Stewart platform."),
+    ("3", "PX4 physically senses platform\nmotion through its onboard IMU."),
+    ("4", "PX4 attitude returns to host;\nhost injects control into X-Plane."),
 ]
-for i, (num, en, kr) in enumerate(steps):
-    y = callout_top + Inches(i * 1.7)
+for i, (num, en) in enumerate(steps):
+    y = callout_top + Inches(i * 1.3)
 
     ntb = _tb(sl, callout_x, y, Inches(0.6), Inches(0.5))
     p = ntb.text_frame.paragraphs[0]
@@ -450,15 +466,14 @@ for i, (num, en, kr) in enumerate(steps):
     p.font.color.rgb = BLUE
     p.font.bold = True
 
-    tb = _tb(sl, callout_x + Inches(0.7), y, Inches(6.0), Inches(1.3))
+    tb = _tb(sl, callout_x + Inches(0.7), y+Cm(0.1), Inches(6.0), Inches(1.3))
     ttf = tb.text_frame
     ttf.word_wrap = True
     p = ttf.paragraphs[0]
     p.text = en
-    p.font.size = Pt(18)
+    p.font.size = Pt(24)
     p.font.color.rgb = DARK
     p.line_spacing = Pt(24)
-    _ko(ttf, kr, 14, Pt(4))
 
 ftb = _tb(sl, Inches(2), Inches(9.3), Inches(16), Inches(0.6))
 p = ftb.text_frame.paragraphs[0]
@@ -491,18 +506,18 @@ p.text = "Baseline Scenario"
 p.font.size = Pt(26)
 p.font.color.rgb = BLUE
 p.font.bold = True
-_ko(ltf, "기본 실험 시나리오", 16)
 _p(ltf, "Pitch trim transition:", 22, DARK, True, Pt(18))
 _p(ltf, "0\u00b0 \u2192 +5\u00b0 \u2192 hold \u2192 0\u00b0", 26, BLUE, True, Pt(6))
 _p(ltf, "", 8, sp=Pt(8))
-_bullet(ltf, "Same initial condition each run",
-        "매 실험 동일 초기 조건", 18, Pt(10))
-_bullet(ltf, "Repeated for statistics",
-        "통계 확보를 위해 반복 수행", 18, Pt(10))
-_bullet(ltf, "Neutral at z=+20 mm (max rotation)",
-        "z=+20 mm 기본 자세 (회전 범위 극대화)", 18, Pt(10))
-_bullet(ltf, "Stays inside workspace",
-        "작업 영역 내 정상 거동", 18, Pt(10))
+_bullet(ltf, "항상 동일 Honolulu (PHNL) 10nm 어프로치로 시작", "", 18, Pt(8))
+_p(ltf, "", 8, sp=Inches(0.09))
+_bullet(ltf, "스크립트로 적용된 유예 기간 동안 시스템 안정화 후 데이터 수집", "", 18, Pt(8))
+_p(ltf, "", 8, sp=Inches(0.09))
+_bullet(ltf, "Stewart 플랫폼의 포화 플래그(SAT) 감시; 작업 공간 내 유지", "", 18, Pt(8))
+_p(ltf, "", 8, sp=Inches(0.09))
+_bullet(ltf, "조건별 9회 반복 실행으로 통계적 유의미성 확보", "", 18, Pt(8))
+_p(ltf, "", 8, sp=Inches(0.09))
+_bullet(ltf, "z=+20 mm에서 중립자세 설정 (최대 회전)", "", 18, Pt(8))
 
 div = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(9.85), Inches(3.6), Pt(2), Inches(5.4))
 div.fill.solid()
@@ -517,25 +532,23 @@ p.text = "Logged Signals"
 p.font.size = Pt(26)
 p.font.color.rgb = BLUE
 p.font.bold = True
-_ko(rtf, "기록 신호", 16)
-for en, kr in [
-    ("X-Plane attitude", "X-Plane 자세"),
-    ("PX4 attitude estimate", "PX4 자세 추정값"),
-    ("Platform pose command", "플랫폼 pose 명령"),
-    ("ACK timing + host timestamps", "ACK 타이밍 및 타임스탬프"),
+for en in [
+    "X-Plane attitude",
+    "PX4 자세 추정값",
+    "플랫폼 pose command",
+    "ACK timing + host timestamps",
 ]:
-    _bullet(rtf, en, kr, 20, Pt(10))
+    _bullet(rtf, en, None, 20, Pt(10))
 
 _p(rtf, "", 8, sp=Pt(14))
 _p(rtf, "Extracted Metrics", 24, BLUE, True, Pt(6))
-_ko(rtf, "추출 메트릭", 15)
-for en, kr in [
-    ("Tracking error (raw)", "추종 오차 (원시)"),
-    ("Bias-corrected tracking error", "바이어스 보정 추종 오차"),
-    ("Sample age", None),
-    ("Serial RTT / end-to-end delay", "종단간 지연"),
+for en in [
+    "Tracking error (raw)",
+    "Bias-corrected tracking error",
+    "Sample age",
+    "Serial RTT / end-to-end delay",
 ]:
-    _bullet(rtf, en, kr, 20, Pt(8))
+    _bullet(rtf, en, None, 20, Pt(8))
 
 _sn(sl, 6)
 
@@ -563,7 +576,7 @@ _p(atf, "", 8, sp=Pt(16))
 _p(atf, "Residual offset is structured \u2014\nexplainable bias, not instability.", 20, DARK, sp=Pt(4))
 _ko(atf, "잔여 오프셋: 불안정이 아닌 설명 가능한 바이어스", 14, Pt(8))
 
-_callout(sl, Inches(2.67), Inches(8.5), Inches(14.66), Inches(1.2),
+_callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
          "The platform reproduces commanded attitude transitions well enough "
          "for quantitative closed-loop validation.", 20)
 
@@ -599,9 +612,9 @@ p.font.color.rgb = GREY
 p.font.italic = True
 p.alignment = PP_ALIGN.CENTER
 
-_callout(sl, Inches(2.67), Inches(8.5), Inches(14.66), Inches(1.2),
+_callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
          "The dominant residual is not random instability \u2014 "
-         "a fixed bias must be separated from dynamic tracking fidelity.", 18)
+         "a fixed bias must be separated from dynamic tracking fidelity.", 20)
 
 _sn(sl, 8)
 
@@ -635,7 +648,7 @@ for text, x in chips:
     p.font.bold = True
     p.alignment = PP_ALIGN.CENTER
 
-ctf = _callout(sl, Inches(2.67), Inches(8.4), Inches(14.66), Inches(1.5),
+ctf = _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
                "Measured delay and jitter explain the phase lag and define "
                "the practical bandwidth of this platform.", 20)
 _p(ctf, "Baseline runs show near-zero saturation \u2192 nominal timing dominates.",
@@ -672,7 +685,7 @@ limits = [
 positions = [(gx1, gy1), (gx2, gy1), (gx1, gy2), (gx2, gy2)]
 
 for (t_en, t_kr, d_en), (x, y) in zip(limits, positions):
-    _card(sl, x - Inches(0.2), y - Inches(0.15), gw + Inches(0.4), Inches(2.7))
+    _card(sl, x - Inches(0.2), y - Inches(0.15), gw + Inches(0.4), Inches(2.6))
 
     ntb = _tb(sl, x, y, gw, Inches(0.5))
     p = ntb.text_frame.paragraphs[0]
@@ -695,7 +708,7 @@ for (t_en, t_kr, d_en), (x, y) in zip(limits, positions):
     p.font.size = Pt(18)
     p.font.color.rgb = DARK
 
-_callout(sl, Inches(2.67), Inches(9.4), Inches(14.66), Inches(1.0),
+_callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
          "Correct claim: a practical, measurable, "
          "physically informed pre-flight validation layer.", 20)
 
@@ -761,7 +774,7 @@ for en, kr in [
     _p(rtf, f"\u2192  {en}", 18, DARK, sp=Pt(16))
     _ko(rtf, f"    {kr}", 14)
 
-ctf = _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.6),
+ctf = _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
                "This platform fills part of the gap between "
                "software-only HILS and real flight testing.", 20)
 _p(ctf, "Thank you \u2014 Questions welcome", 22, BLUE, True, Pt(12), PP_ALIGN.CENTER)
