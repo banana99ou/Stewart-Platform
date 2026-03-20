@@ -182,20 +182,43 @@ def fig5_latency(
 ) -> tuple[Path, Path]:
     plt = _mpl()
 
-    # (a) hero run time series
+    # (a) hero run — band plot (mean ± std in 1-second bins)
     fig_a, ax_a = plt.subplots(1, 1, figsize=(FIG5A_W, 3.8))
     t = run_hero.t_s
     m = run_hero.analysis_mask
-    ax_a.plot(t[m], run_hero.xp_age_ms[m], lw=1.1,
-              label="X-Plane sample age (ms)")
-    ax_a.plot(t[m], run_hero.px4_age_ms[m], lw=1.1,
-              label="PX4 sample age (ms)")
+
+    BIN_S = 1.0
+    t_an = t[m]
+    bin_edges = np.arange(t_an.min(), t_an.max() + BIN_S, BIN_S)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+    def _band(ax, t_sig, y_sig, bins, centers, color, label):
+        """Plot mean line + min/max shaded band per time bin."""
+        idx = np.digitize(t_sig, bins) - 1
+        idx = np.clip(idx, 0, len(centers) - 1)
+        means = np.array([np.nanmean(y_sig[idx == i]) if np.any(idx == i) else np.nan for i in range(len(centers))])
+        mins = np.array([np.nanmin(y_sig[idx == i]) if np.any(idx == i) else np.nan for i in range(len(centers))])
+        maxs = np.array([np.nanmax(y_sig[idx == i]) if np.any(idx == i) else np.nan for i in range(len(centers))])
+        valid = np.isfinite(means)
+        ax.plot(centers[valid], means[valid], lw=1.5, color=color, label=label)
+        ax.fill_between(centers[valid], mins[valid], maxs[valid],
+                        color=color, alpha=0.18)
+
+    _band(ax_a, t_an, run_hero.xp_age_ms[m],
+          bin_edges, bin_centers, "tab:blue", "X-Plane sample age")
+    _band(ax_a, t_an, run_hero.px4_age_ms[m],
+          bin_edges, bin_centers, "tab:orange", "PX4 sample age")
+
     if run_hero.ack_t_s.size > 0:
         ack_mask = (np.isfinite(run_hero.ack_t_s)
                     & (run_hero.ack_t_s >= float(SKIP_FIRST_S)))
-        ax_a.plot(run_hero.ack_t_s[ack_mask],
-                  run_hero.serial_rtt_ms_by_ack[ack_mask],
-                  lw=1.1, label="Stewart serial RTT (ms)")
+        ack_t = run_hero.ack_t_s[ack_mask]
+        ack_y = run_hero.serial_rtt_ms_by_ack[ack_mask]
+        ack_edges = np.arange(ack_t.min(), ack_t.max() + BIN_S, BIN_S)
+        ack_centers = 0.5 * (ack_edges[:-1] + ack_edges[1:])
+        _band(ax_a, ack_t, ack_y,
+              ack_edges, ack_centers, "tab:green", "Serial RTT")
+
     ax_a.set_xlabel("time (s) from run start")
     ax_a.set_ylabel("ms")
     ax_a.grid(True, alpha=0.25)

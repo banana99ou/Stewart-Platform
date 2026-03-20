@@ -41,7 +41,7 @@ HEADER_H = Inches(2.11)
 CONTENT_TOP = Inches(0.83 + 2.11 + 0.3)  # ~3.24"
 CL = Inches(1.6)
 CW = Inches(16.8)
-TOTAL = 12
+TOTAL = 13
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -253,7 +253,7 @@ p.font.size = Pt(22)
 p.font.color.rgb = BLACK
 p.font.bold = True
 p.alignment = PP_ALIGN.CENTER
-_p(tf, "[Author Name] \u2014 [Affiliation]", 18, GREY, sp=Pt(6), align=PP_ALIGN.CENTER)
+_p(tf, "\uc815\ud604\uc6a9 \u2014 \uad6d\ubbfc\ub300\ud559\uad50 \ubbf8\ub798\ubaa8\ube4c\ub9ac\ud2f0\uc81c\uc5b4\uc5f0\uad6c\uc2e4", 18, GREY, sp=Pt(6), align=PP_ALIGN.CENTER)
 
 _sn(sl, 1)
 
@@ -303,6 +303,7 @@ for en, kr in [
     ("PX4 IMU senses real inertial excitation", "PX4 IMU 실제 관성 자극 감지"),
     ("Measured attitude fed back into loop", "측정 자세 → 제어 루프 피드백"),
     ("Timing and fidelity measured", "타이밍·충실도 정량 측정"),
+    ("Vehicle-agnostic: quad, satellite, missile...", "기체 비종속: 쿼드콥터, 위성, 유도탄 등"),
 ]:
     _bullet(rtf, en, kr, 20, Pt(14))
 
@@ -385,10 +386,12 @@ for i, (num, t_en, t_kr, d_en, d_kr) in enumerate(labels):
     p.alignment = PP_ALIGN.CENTER
     _ko(dtf, d_kr, 14, Pt(8), PP_ALIGN.CENTER)
 
-_callout(
-    sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
-    "\u26A0\uFE0F 연구 목적상 폐루프 성능 중심으로 설계되었으며, 전 영역 공력 효과는 포함하지 않습니다.", 20
+ctf = _callout(
+    sl, Inches(2.67), Inches(8.5), Inches(14.66), Inches(1.6),
+    "기체 비종속 구조: 시뮬레이터 모델과 제어기 튜닝만 변경하면 멀티로터, 위성 등 다양한 기체를 동일 환경에서 검증 가능", 18
 )
+_p(ctf, "보완적 검증 수단 - 전 영역 공력 효과 재현이 아닌, 폐루프 성능 중심 설계",
+   16, GREY, sp=Pt(6), align=PP_ALIGN.CENTER)
 
 _sn(sl, 3)
 
@@ -477,7 +480,7 @@ for i, (num, en) in enumerate(steps):
 
 ftb = _tb(sl, Inches(2), Inches(9.3), Inches(16), Inches(0.6))
 p = ftb.text_frame.paragraphs[0]
-p.text = "The loop is closed across software, mechanics, sensing, and control I/O."
+p.text = "SW·기구부·센싱·제어 I/O를 하나로 잇는 물리적 폐루프"
 p.font.size = Pt(20)
 p.font.color.rgb = BLUE
 p.font.bold = True
@@ -567,18 +570,41 @@ atb = _tb(sl, Inches(13.0), Inches(3.6), Inches(5.5), Inches(2.0))
 atf = atb.text_frame
 atf.word_wrap = True
 p = atf.paragraphs[0]
-p.text = "PX4 follows the step response with consistent phase lag."
-p.font.size = Pt(20)
-p.font.color.rgb = DARK
-_ko(atf, "일관된 위상 지연으로 스텝 응답 추종", 14, Pt(8))
+p.text = ""
+
+def _run(txt, bold=False, color=DARK):
+    r = p.add_run()
+    r.text = txt
+    r.font.size = Pt(20)
+    r.font.bold = bold
+    r.font.color.rgb = color
+    r.font.name = FONT_NAME
+    return r
+
+orange = RGBColor(0xE6, 0x7E, 0x22)
+blue_dashed = RGBColor(0x4A, 0x90, 0xE2)
+
+_run("점선", bold=True)
+_run(": 스텝 입력. ")
+_run("주황선", bold=True, color=orange)
+_run(": FC pitch.\n")
+_run("파란 점선", bold=True, color=blue_dashed)
+_run(": X-Plane pitch.\n")
+_run("파랑선", bold=True, color=BLUE)
+_run(": +1.82° 보정된 X-Plane pitch이며 ")
+_run("FC pitch", bold=True, color=orange)
+_run("와 거의 일치함")
 
 _p(atf, "", 8, sp=Pt(16))
-_p(atf, "Residual offset is structured \u2014\nexplainable bias, not instability.", 20, DARK, sp=Pt(4))
-_ko(atf, "잔여 오프셋: 불안정이 아닌 설명 가능한 바이어스", 14, Pt(8))
+_p(atf, "PX4는 일관된 위상 지연을 보이며 스텝을 추종하는 결과를 보임.", 20, DARK, sp=Pt(4))
+_ko(atf, "", 14, Pt(8))
+
+_p(atf, "", 8, sp=Pt(16))
+_p(atf, "잔여 오프셋은 설명 가능한 바이어스임. 실험을 반복해도 일관되게 관찰됨.", 20, DARK, sp=Pt(4))
+_ko(atf, "", 14, Pt(8))
 
 _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
-         "The platform reproduces commanded attitude transitions well enough "
-         "for quantitative closed-loop validation.", 20)
+         "플랫폼은 정량적 폐루프 검증이 가능할 정도로, 명령된 자세 전이를 충분히 정확하게 재현한다.", 20)
 
 _sn(sl, 7)
 
@@ -598,7 +624,7 @@ _img(sl, fig4, Inches(10.0), Inches(3.4), width=pw)
 
 cap1 = _tb(sl, Inches(1.0), Inches(7.6), pw, Inches(0.5))
 p = cap1.text_frame.paragraphs[0]
-p.text = "Bias correction moves error distribution closer to zero."
+p.text = "바이어스 보정을 적용하면 오차 분포가 0에 더 가까워진다."
 p.font.size = Pt(16)
 p.font.color.rgb = GREY
 p.font.italic = True
@@ -606,15 +632,13 @@ p.alignment = PP_ALIGN.CENTER
 
 cap2 = _tb(sl, Inches(10.0), Inches(7.6), pw, Inches(0.5))
 p = cap2.text_frame.paragraphs[0]
-p.text = "Firm-mounted run shows stable offset consistent with mounting bias."
+p.text = "단단히 고정한 실험에서는 장착 바이어스와 일치하는 안정적인 오프셋이 관찰된다."
 p.font.size = Pt(16)
 p.font.color.rgb = GREY
 p.font.italic = True
 p.alignment = PP_ALIGN.CENTER
 
-_callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
-         "The dominant residual is not random instability \u2014 "
-         "a fixed bias must be separated from dynamic tracking fidelity.", 20)
+_callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2), "지배적인 잔여 오차는 무작위 불안정이 아니며, 고정 바이어스는 동적 추종 충실도와 분리해 해석해야 한다.", 20)
 
 _sn(sl, 8)
 
@@ -648,75 +672,13 @@ for text, x in chips:
     p.font.bold = True
     p.alignment = PP_ALIGN.CENTER
 
-ctf = _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
-               "Measured delay and jitter explain the phase lag and define "
-               "the practical bandwidth of this platform.", 20)
-_p(ctf, "Baseline runs show near-zero saturation \u2192 nominal timing dominates.",
-   16, GREY, sp=Pt(6))
+ctf = _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),"측정된 지연과 지터가 위상 지연을 설명하며, 이 플랫폼의 실질적 대역폭을 정의한다.", 20)
 
 _sn(sl, 9)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SLIDE 10 — Limitations
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-sl = make_slide(prs, blank)
-slide_title(sl, "What This Platform Does Not Claim")
-
-gw = Inches(7.5)
-ggap = Inches(1.0)
-gx1 = Inches(1.8)
-gx2 = gx1 + gw + ggap
-gy1 = Inches(3.4)
-gy2 = Inches(6.4)
-
-limits = [
-    ("Finite Workspace", "유한한 작업 영역",
-     "Large multi-axis commands reduce\nthe feasible operating region."),
-    ("No Physical Aerodynamic Load", "공력 하중 미재현",
-     "The platform reproduces motion cues,\nnot full external-force physics."),
-    ("Platform-Level Actuation Limits", "플랫폼 구동 한계",
-     "Timing, hysteresis, and actuator\nconstraints shape response fidelity."),
-    ("Not a Flight Replacement", "비행 대체 불가",
-     "This platform complements conventional\nHILS and real flight testing."),
-]
-
-positions = [(gx1, gy1), (gx2, gy1), (gx1, gy2), (gx2, gy2)]
-
-for (t_en, t_kr, d_en), (x, y) in zip(limits, positions):
-    _card(sl, x - Inches(0.2), y - Inches(0.15), gw + Inches(0.4), Inches(2.6))
-
-    ntb = _tb(sl, x, y, gw, Inches(0.5))
-    p = ntb.text_frame.paragraphs[0]
-    p.text = t_en
-    p.font.size = Pt(22)
-    p.font.color.rgb = RED
-    p.font.bold = True
-
-    ktb = _tb(sl, x, y + Inches(0.45), gw, Inches(0.4))
-    p = ktb.text_frame.paragraphs[0]
-    p.text = t_kr
-    p.font.size = Pt(14)
-    p.font.color.rgb = KO_GREY
-
-    dtb = _tb(sl, x, y + Inches(0.9), gw, Inches(1.5))
-    dtf = dtb.text_frame
-    dtf.word_wrap = True
-    p = dtf.paragraphs[0]
-    p.text = d_en
-    p.font.size = Pt(18)
-    p.font.color.rgb = DARK
-
-_callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
-         "Correct claim: a practical, measurable, "
-         "physically informed pre-flight validation layer.", 20)
-
-_sn(sl, 10)
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SLIDE 11 — Takeaways
+# SLIDE 10 — Takeaways
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 sl = make_slide(prs, blank)
@@ -735,19 +697,17 @@ p.text = "Key Results"
 p.font.size = Pt(26)
 p.font.color.rgb = BLUE
 p.font.bold = True
-_ko(ltf, "주요 성과", 16)
 
 takeaways = [
-    ("Physically closed-loop HILS architecture\nimplemented: X-Plane + Stewart + PX4.",
-     "물리적 폐루프 HILS 아키텍처 구현"),
-    ("Closed-loop attitude tracking achieved\nand evaluated quantitatively.",
-     "폐루프 자세 추종 달성 및 정량 평가"),
-    ("Bias and latency are measured and used\nto define the platform's true fidelity.",
-     "바이어스·지연 측정으로 실제 충실도 정의"),
+    ("통합: X-Plane + Stewart + PX4를\n하나의 물리적 폐루프 구조로 통합",
+     "통합: 물리적 폐루프 HILS 아키텍처 구현"),
+    ("충실도: 폐루프 자세 추종 달성 및 정량적 평가",
+     "충실도: 폐루프 자세 추종 달성 및 정량 평가"),
+    ("범용성: 기체에 종속되지 않는 시스템.\n고정익기, 멀티로터, 인공위성 등 다양한 기체에 적용할수 있는 testbed 개발",
+     "범용성: 기체 비종속 구조 \u2014 동일 환경으로 다양한 기체 검증"),
 ]
 for i, (en, kr) in enumerate(takeaways):
-    _p(ltf, f"{i + 1}.  {en}", 18, DARK, sp=Pt(16))
-    _ko(ltf, f"     {kr}", 14)
+    _p(ltf, f"{i + 1}.  {en}", 20, DARK, sp=Pt(14))
 
 div = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(9.85), Inches(3.5), Pt(2), Inches(5.0))
 div.fill.solid()
@@ -762,96 +722,145 @@ p.text = "Next Steps"
 p.font.size = Pt(26)
 p.font.color.rgb = BLUE
 p.font.bold = True
-_ko(rtf, "향후 과제", 16)
 
 for en, kr in [
-    ("Time-aligned error analysis", "시간 정렬 기반 오차 분석"),
-    ("Repeatability / hysteresis\ncharacterization",
+    ("시간 정렬후 오차 분석", "시간 정렬 기반 오차 분석"),
+    ("반복성·히스테리시스 특성 분석",
      "반복성·히스테리시스 특성 분석"),
-    ("Stress tests near workspace\nand saturation limits",
+    ("작동영역 및 포화 한계 부근 스트레스 테스트",
      "작업 영역·포화 한계 스트레스 시험"),
+    ("다양한 기체에 대한 검증 진행 (멀티로터, 위성 등)",
+     "다기체 검증 (멀티로터, 위성 등)"),
 ]:
-    _p(rtf, f"\u2192  {en}", 18, DARK, sp=Pt(16))
-    _ko(rtf, f"    {kr}", 14)
+    _p(rtf, f"\u2192  {en}", 20, DARK, sp=Pt(14))
 
-ctf = _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
-               "This platform fills part of the gap between "
-               "software-only HILS and real flight testing.", 20)
-_p(ctf, "Thank you \u2014 Questions welcome", 22, BLUE, True, Pt(12), PP_ALIGN.CENTER)
+_callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
+         "소프트웨어 전용 HILS와 실제 비행 시험 사이의 격차를 메우는 물리적 검증 수단", 20)
+
+_sn(sl, 10)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SLIDE 11 — End / Thank You
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+sl = make_slide(prs, blank)
+
+tb = _tb(sl, Inches(2), Inches(3.0), Inches(16), Inches(1.5))
+p = tb.text_frame.paragraphs[0]
+p.text = "Thank You"
+p.font.size = Pt(56)
+p.font.color.rgb = BLACK
+p.font.bold = True
+p.alignment = PP_ALIGN.CENTER
+
+tb2 = _tb(sl, Inches(2), Inches(5.0), Inches(16), Inches(1.0))
+p = tb2.text_frame.paragraphs[0]
+p.text = "감사합니다"
+p.font.size = Pt(32)
+p.font.color.rgb = KO_GREY
+p.alignment = PP_ALIGN.CENTER
+
+tb3 = _tb(sl, Inches(2), Inches(6.5), Inches(16), Inches(1.0))
+p = tb3.text_frame.paragraphs[0]
+p.text = "Questions welcome"
+p.font.size = Pt(24)
+p.font.color.rgb = BLUE
+p.font.bold = True
+p.alignment = PP_ALIGN.CENTER
 
 _sn(sl, 11)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SLIDE 12 — Q&A Backup
+# SLIDE 12 — Backup: z=+20 mm Proof
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 sl = make_slide(prs, blank)
-slide_title(sl, "Backup: Anticipated Questions")
-
-# Left: z=+20mm proof
-q1h = _tb(sl, CL, Inches(3.2), Inches(7.5), Inches(0.6))
-p = q1h.text_frame.paragraphs[0]
-p.text = '"Why z=+20 mm as the neutral position?"'
-p.font.size = Pt(22)
-p.font.color.rgb = BLUE
-p.font.bold = True
+slide_title(sl, "Q&A")
 
 rot_fig = os.path.join(FIG, "rot_worst_vs_z.png")
-_img(sl, rot_fig, Inches(2.0), Inches(3.9), width=Inches(6.0))
+_img(sl, rot_fig, Inches(2.5), Inches(3.4), width=Inches(10.0))
 
-ann = _tb(sl, Inches(1.8), Inches(8.3), Inches(6.5), Inches(0.8))
+ann = _tb(sl, Inches(13.5), Inches(3.6), Inches(5.5), Inches(4.0))
 atf = ann.text_frame
 atf.word_wrap = True
 p = atf.paragraphs[0]
-p.text = ("z=+20 mm \u2192 ~20\u00b0 rotation range\n"
-          "z=0 mm \u2192 ~10\u00b0 (insufficient for \u00b15\u00b0 test)")
-p.font.size = Pt(16)
-p.font.color.rgb = DARK
-p.line_spacing = Pt(22)
-
-# Right: Q&A cards
-questions = [
-    ('"Why not conventional HILS?"',
-     "Real inertial excitation that sensor synthesis\ncannot provide. \u2192 Slides 3 + 10"),
-    ('"How do you handle saturation?"',
-     "Baseline \u00b15\u00b0 out of ~20\u00b0 available.\nStress tests planned. \u2192 Sl 6+10+11"),
-    ('"Effective bandwidth?"',
-     "~50 Hz tick, E2E latency ~51 ms.\nLow-freq suited. \u2192 Sl 5+9"),
-    ('"Open-loop platform \u2014 pose accuracy?"',
-     "No encoder feedback. PX4 IMU only\nphysical measurement. \u2192 Sl 10"),
-    ('"What is mounting bias?"',
-     "~1.8\u00b0 from FC alignment. Stable\n(\u03c3\u22480.2\u00b0), calibrated. \u2192 Sl 8"),
-    ('"How repeatable across runs?"',
-     "5 runs: \u03c3\u22480.2\u00b0 intra, \u0394\u22640.8\u00b0 inter.\n\u2192 Slides 8+11"),
-    ('"Extend to quadrotors?"',
-     "Vehicle-agnostic architecture.\nOnly model + PID change. \u2192 Sl 11"),
-]
-
-cw = Inches(3.8)
-cgap = Inches(0.2)
-c1x = Inches(9.5)
-c2x = c1x + cw + cgap
-card_h = Inches(1.3)
-card_gap = Inches(0.15)
-cards_top = Inches(3.2)
-
-for i, (q_en, answer) in enumerate(questions):
-    col = i % 2
-    row = i // 2
-    x = c1x if col == 0 else c2x
-    y = cards_top + row * (card_h + card_gap)
-    qtb = _tb(sl, x, y, cw, card_h)
-    qtf = qtb.text_frame
-    qtf.word_wrap = True
-    p = qtf.paragraphs[0]
-    p.text = q_en
-    p.font.size = Pt(13)
-    p.font.color.rgb = BLUE
-    p.font.bold = True
-    _p(qtf, answer, 11, DARK, sp=Pt(4))
+p.text = "z = +20 mm"
+p.font.size = Pt(28)
+p.font.color.rgb = BLUE
+p.font.bold = True
+_p(atf, "\u2192 ~20\u00b0 rotation range", 22, DARK, sp=Pt(8))
+_p(atf, "Sufficient for \u00b15\u00b0 trim test\nwith large margin.", 18, DARK, sp=Pt(16))
+_p(atf, "", 8, sp=Pt(24))
+_p(atf, "z = 0 mm", 28, RED, True, Pt(8))
+_p(atf, "\u2192 ~10\u00b0 rotation range", 22, DARK, sp=Pt(8))
+_p(atf, "Insufficient for \u00b15\u00b0 test.", 18, GREY, sp=Pt(16))
 
 _sn(sl, 12)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SLIDE 13 — Backup: Anticipated Questions
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+sl = make_slide(prs, blank)
+slide_title(sl, "Q&A")
+
+questions = [
+    ("Why not conventional HILS?",
+     "Real inertial excitation that sensor\nsynthesis cannot provide. \u2192 Sl 3"),
+    ("How do you handle saturation?",
+     "Baseline \u00b15\u00b0 out of ~20\u00b0 available.\nStress tests planned. \u2192 Sl 6+10"),
+    ("Effective bandwidth?",
+     "~50 Hz tick, E2E latency ~51 ms.\nLow-freq maneuvers suited. \u2192 Sl 5+9"),
+    ("Open-loop platform \u2014 pose accuracy?",
+     "Hobby servos, no encoder. Inclinometer:\n~2.1\u00b0 roll, ~1.5\u00b0 pitch. \u2192 Sl 3"),
+    ("What is mounting bias?",
+     "~1.8\u00b0 from FC alignment. Stable\n(\u03c3 \u2248 0.2\u00b0), calibrated out. \u2192 Sl 8"),
+    ("How repeatable across runs?",
+     "5 runs: \u03c3 \u2248 0.2\u00b0 intra, \u0394 \u2264 0.8\u00b0 inter.\n\u2192 Sl 8+10"),
+    ("What about yaw?",
+     "In the loop, but trim scenario\nexcites pitch primarily. \u2192 Sl 6"),
+    ("Extend to quadrotors?",
+     "Vehicle-agnostic architecture.\nOnly model + PID change. \u2192 Sl 10"),
+]
+
+cols = 4
+rows = 2
+cw = Inches(4.2)
+ch = Inches(2.6)
+cgap_x = Inches(0.3)
+cgap_y = Inches(0.3)
+total_w = cols * cw + (cols - 1) * cgap_x
+grid_left = (prs.slide_width - total_w) // 2
+grid_top = Inches(3.3)
+
+for i, (q, a) in enumerate(questions):
+    col = i % cols
+    row = i // cols
+    x = grid_left + col * (cw + cgap_x)
+    y = grid_top + row * (ch + cgap_y)
+
+    _card(sl, x, y, cw, ch)
+
+    qtb = _tb(sl, x + Inches(0.25), y + Inches(0.2), cw - Inches(0.5), Inches(0.6))
+    p = qtb.text_frame.paragraphs[0]
+    p.text = q
+    p.font.size = Pt(16)
+    p.font.color.rgb = BLUE
+    p.font.bold = True
+
+    atb = _tb(sl, x + Inches(0.25), y + Inches(0.85), cw - Inches(0.5), ch - Inches(1.1))
+    atf = atb.text_frame
+    atf.word_wrap = True
+    p = atf.paragraphs[0]
+    p.text = a
+    p.font.size = Pt(14)
+    p.font.color.rgb = DARK
+    p.line_spacing = Pt(20)
+
+_sn(sl, 13)
 
 
 # ── Save ────────────────────────────────────────────────────────────

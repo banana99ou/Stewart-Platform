@@ -7,9 +7,9 @@ Slide numbers match the current deck (12 slides).
 
 ## Slide 1 — Title / One-line contribution
 
-Hello, I'm [name]. Today I'll be talking about our work building a physically closed-loop HILS testbed using a Stewart platform.
+Hello, I'm Hyeon-yong Jeong. Today I'll be talking about our work building a physically closed-loop HILS testbed using a Stewart platform.
 
-> 안녕하세요, [이름]입니다. 오늘은 스튜어트 플랫폼을 이용한 물리적 폐루프 HILS 시험 환경 구축에 대해 말씀드리겠습니다.
+> 안녕하세요, 국민대학교 미래모빌리티제어연구실 석사과정 정현용입니다. 오늘은 스튜어트 플랫폼을 이용한 물리적 폐루프 HILS 시험 환경 구축에 대해 말씀드리겠습니다.
 
 In short — we connected X-Plane, a real Stewart platform, and a real PX4 flight controller into one loop. The simulator drives physical motion, the PX4 senses it, and that measurement feeds right back into the simulation.
 
@@ -113,17 +113,17 @@ We set the platform's neutral position at z = +20 mm — that maximizes the avai
 
 > 플랫폼 중립 위치는 z = +20 mm으로 설정했습니다. 회전 가용 범위가 최대가 되는 높이입니다.
 
-The baseline scenario is a simple trim transition: pitch goes from 0 to +5 degrees, holds there, then comes back.
+The baseline scenario is a simple trim transition: pitch goes from 0 to +5 degrees, holds there, then comes back. Every run launches from the same X-Plane starting condition — a Honolulu PHNL 10-nautical-mile approach.
 
-> 기본 시나리오는 트림 전환입니다. 피치를 0도에서 +5도로 올렸다가, 유지한 뒤, 다시 돌아옵니다.
+> 기본 시나리오는 트림 전환입니다. 피치를 0도에서 +5도로 올렸다가, 유지한 뒤, 다시 돌아옵니다. 모든 실험은 동일한 X-Plane 초기 조건인 호놀룰루 PHNL 10nautical mile 어프로치에서 시작합니다.
 
-Every run starts from the same initial condition, and we repeated it multiple times so we have statistics.
+Before each run, there's a scripted grace period for the system to stabilize, and we monitor the Stewart platform's saturation flag throughout to make sure we stay within the feasible workspace. We ran 9 repetitions per condition for statistical confidence.
 
-> 매번 동일한 초기 조건에서 출발하고, 통계 분석을 위해 여러 번 반복했습니다.
+> 각 실험 전에 스크립트로 설정한 유예 기간 동안 시스템을 안정화하고, 실험 내내 스튜어트 플랫폼의 포화 플래그를 감시하여 구동 가능 영역 안에 있는지 확인합니다. 조건별로 9회 반복하여 통계적 유의미성을 확보했습니다.
 
-For each run we record X-Plane attitude, PX4 attitude, command-ACK timing, and a set of post-processed metrics. We picked this scenario because it's simple, repeatable, and gives us clean numbers to work with.
+For each run we record X-Plane attitude, PX4 attitude, platform pose commands, command-ACK timing, and a set of post-processed metrics. We picked this scenario because it's simple, repeatable, and gives us clean numbers to work with.
 
-> 각 실험에서 X-Plane 자세, PX4 자세, 명령-ACK 타이밍, 후처리 메트릭을 기록합니다. 단순하고 반복 가능하며, 정량 분석에 바로 쓸 수 있기 때문에 이 시나리오를 선택했습니다.
+> 각 실험에서 X-Plane 자세, PX4 자세, 플랫폼 자세 명령, 명령-ACK 타이밍, 후처리 메트릭을 기록합니다. 단순하고 반복 가능하며, 정량 분석에 바로 쓸 수 있기 때문에 이 시나리오를 선택했습니다.
 
 `>> NEXT SLIDE`
 
@@ -137,11 +137,11 @@ Now let's look at the results. Starting with tracking.
 
 You can see here that PX4 pitch follows the commanded transition — there's a lag, which is expected, and we'll quantify it shortly. What's interesting is that the raw error includes a near-constant offset.
 
-> 보시면 PX4 피치가 명령 전환을 따라가고 있습니다. 지연이 있는데, 이건 예상된 것이고 곧 정량화하겠습니다. 주목할 점은 원시 오차에 거의 일정한 오프셋이 있다는 것입니다.
+> 보시면 PX4 피치가 명령 전환을 따라가고 있습니다. 예상대로 시간 지연이 보이는데, 정확한 수치는 다음 결과에서 분석하겠습니다. 주목할 점은 보정 전 오차에 거의 일정한 오프셋이 포함되어 있다는 것입니다.
 
-But that offset isn't random instability. It looks like a mounting bias — a physical alignment issue. So we evaluated both the raw error and a bias-corrected version.
+But that offset isn't random instability. It's about +1.8 degrees, consistent across runs, which points to a mounting bias — a physical alignment issue. So we evaluated both the raw error and a bias-corrected version.
 
-> 이 오프셋은 무작위적 불안정이 아닙니다. 장착 정렬에서 오는 바이어스로 보여서, 원시 오차와 바이어스 보정 오차를 둘 다 평가했습니다.
+> 이 오프셋은 무작위적 불안정이 아닙니다. 약 +1.8도로 실험 간에 일관되게 나타나며, 장착 정렬에서 오는 바이어스로 판단됩니다. 그래서 보정 전 오차와 바이어스 보정 후 오차를 둘 다 평가했습니다.
 
 The bottom line: closed-loop tracking works, it's quantifiable, and the error structure makes physical sense.
 
@@ -157,9 +157,9 @@ So if there's a bias, where does it come from? That's what this slide answers.
 
 [Show Fig. 3: pitch error + Fig. 4: mounting bias evidence]
 
-We ran the same experiment with two different mounting setups. In the loose configuration, the RC aircraft was held down with just masking tape. In the firm configuration, we glued it with hot glue and strapped it to the upper platform tightly with paracord.
+We tested two mounting conditions: a loosely fixed setup using only adhesive tape, and a rigidly fixed setup using structural adhesive combined with mechanical tiedowns to the top plate.
 
-> 동일한 실험을 두 가지 장착 방식으로 진행했습니다. 느슨한 장착에서는 RC 항공기를 마스킹 테이프로만 고정했고, 단단한 장착에서는 핫글루로 접착한 뒤 파라코드로 상판에 단단히 묶었습니다.
+> 두 가지 장착 조건을 비교했습니다. 접착 테이프만으로 가볍게 고정한 느슨한 장착과, 구조용 접착제에 기계적 결속을 더해 상판에 단단히 고정한 강성 장착입니다.
 
 The results are telling. With loose mounting, the error gradually grows over the run — the aircraft physically shifts under repeated inertial loads. With firm mounting, the error stays flat and monotonic throughout.
 
