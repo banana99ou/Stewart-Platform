@@ -62,12 +62,12 @@ def _mpl():
         "font.family": "sans-serif",
         "font.sans-serif": [FONT_NAME, "NanumSquare", "DejaVu Sans"],
         "axes.unicode_minus": False,
-        "font.size": 14,
-        "axes.labelsize": 14,
-        "axes.titlesize": 14,
-        "xtick.labelsize": 12,
-        "ytick.labelsize": 12,
-        "legend.fontsize": 12,
+        "font.size": 16,
+        "axes.labelsize": 16,
+        "axes.titlesize": 16,
+        "xtick.labelsize": 14,
+        "ytick.labelsize": 14,
+        "legend.fontsize": 13,
         "figure.dpi": DPI,
     })
     return plt
@@ -88,11 +88,12 @@ def fig2_pitch_response(run: RunData) -> Path:
         [_to_float(r.get("sp_pitch_deg")) for r in run.tick_rows], dtype=float
     )
     if np.any(np.isfinite(sp)):
-        ax.plot(t[m], sp[m], "k--", lw=1.5, label="setpoint pitch (deg)")
+        ax.plot(t[m], sp[m], "k--", lw=2.5, label="setpoint pitch (deg)")
 
-    ax.plot(t[m], run.xp_pitch[m], color="tab:blue", lw=1.2, ls=":",
+    ax.plot(t[m], run.xp_pitch[m], color="tab:blue", lw=2.4, ls="--",
             label="X-Plane pitch raw (deg)")
-    ax.plot(t[m], run.px4_pitch[m], color="tab:orange", lw=1.2,
+    ax.plot(t[m], run.px4_pitch[m], color="tab:orange", lw=2.4,
+            marker="o", markevery=40, markersize=5,
             label="PX4 pitch (deg)")
 
     pb = run.mount_bias_pitch_deg
@@ -100,7 +101,7 @@ def fig2_pitch_response(run: RunData) -> Path:
         ax.plot(
             t[m],
             _wrap_deg(run.xp_pitch + pb)[m],
-            color="tab:blue", lw=1.2,
+            color="tab:blue", lw=2.4, ls="-",
             label=f"X-Plane pitch fixed ({pb:+.2f}\u00b0)",
         )
 
@@ -124,16 +125,17 @@ def fig3_pitch_error(run: RunData) -> Path:
     m = run.analysis_mask
 
     err_raw = _wrap_deg(run.px4_pitch - run.xp_pitch)
-    ax.plot(t[m], err_raw[m], color="tab:red", lw=1.2,
+    ax.plot(t[m], err_raw[m], color="tab:red", lw=2.4,
             label="raw error (deg)")
 
     pb = run.mount_bias_pitch_deg
     if np.isfinite(pb):
         err_bc = _wrap_deg((run.px4_pitch - pb) - run.xp_pitch)
-        ax.plot(t[m], err_bc[m], color="tab:green", lw=1.2,
+        ax.plot(t[m], err_bc[m], color="tab:green", lw=2.4, ls="--",
+                marker="s", markevery=35, markersize=4,
                 label="bias-corrected (deg)")
 
-    ax.axhline(0.0, color="k", lw=0.8, alpha=0.5)
+    ax.axhline(0.0, color="k", lw=1.2, alpha=0.5)
     ax.set_xlabel("time (s) from run start")
     ax.set_ylabel("error (deg)")
     ax.grid(True, alpha=0.3)
@@ -160,9 +162,9 @@ def fig4_mounting_bias_timeseries(pref: RunData, hero: RunData) -> Path:
         bias_ts = _wrap_deg(run.px4_pitch - run.cmd_pitch)
         pb = run.mount_bias_pitch_deg
         bias_lbl = f"PX4 - cmd pitch (mean {pb:+.2f}\u00b0)" if np.isfinite(pb) else "PX4 - cmd pitch"
-        ax.plot(t[m], bias_ts[m], lw=1.1, color="tab:purple", label=bias_lbl)
+        ax.plot(t[m], bias_ts[m], lw=2.2, color="tab:purple", label=bias_lbl)
         if np.isfinite(pb):
-            ax.axhline(pb, color="k", lw=1.0, alpha=0.35)
+            ax.axhline(pb, color="k", lw=1.4, alpha=0.4, ls="--")
         ax.set_ylabel("deg")
         ax.grid(True, alpha=0.3)
         ax.set_title(subtitle)
@@ -192,7 +194,7 @@ def fig5_latency(
     bin_edges = np.arange(t_an.min(), t_an.max() + BIN_S, BIN_S)
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
-    def _band(ax, t_sig, y_sig, bins, centers, color, label):
+    def _band(ax, t_sig, y_sig, bins, centers, color, label, linestyle="-"):
         """Plot mean line + min/max shaded band per time bin."""
         idx = np.digitize(t_sig, bins) - 1
         idx = np.clip(idx, 0, len(centers) - 1)
@@ -200,14 +202,14 @@ def fig5_latency(
         mins = np.array([np.nanmin(y_sig[idx == i]) if np.any(idx == i) else np.nan for i in range(len(centers))])
         maxs = np.array([np.nanmax(y_sig[idx == i]) if np.any(idx == i) else np.nan for i in range(len(centers))])
         valid = np.isfinite(means)
-        ax.plot(centers[valid], means[valid], lw=1.5, color=color, label=label)
+        ax.plot(centers[valid], means[valid], lw=2.4, ls=linestyle, color=color, label=label)
         ax.fill_between(centers[valid], mins[valid], maxs[valid],
                         color=color, alpha=0.18)
 
     _band(ax_a, t_an, run_hero.xp_age_ms[m],
-          bin_edges, bin_centers, "tab:blue", "X-Plane sample age")
+          bin_edges, bin_centers, "tab:blue", "X-Plane sample age", "-")
     _band(ax_a, t_an, run_hero.px4_age_ms[m],
-          bin_edges, bin_centers, "tab:orange", "PX4 sample age")
+          bin_edges, bin_centers, "tab:orange", "PX4 sample age", "--")
 
     if run_hero.ack_t_s.size > 0:
         ack_mask = (np.isfinite(run_hero.ack_t_s)
@@ -217,10 +219,11 @@ def fig5_latency(
         ack_edges = np.arange(ack_t.min(), ack_t.max() + BIN_S, BIN_S)
         ack_centers = 0.5 * (ack_edges[:-1] + ack_edges[1:])
         _band(ax_a, ack_t, ack_y,
-              ack_edges, ack_centers, "tab:green", "Serial RTT")
+              ack_edges, ack_centers, "tab:green", "Serial RTT", "-.")
 
     ax_a.set_xlabel("time (s) from run start")
     ax_a.set_ylabel("ms")
+    ax_a.set_ylim(0, 80)
     ax_a.grid(True, alpha=0.25)
     ax_a.legend(loc="upper right")
     fig_a.tight_layout()
@@ -249,8 +252,17 @@ def fig5_latency(
     fig_b, ax_b = plt.subplots(1, 1, figsize=(FIG5B_W, 3.8))
     data = [xp_age_all, px_age_all, serial_rtt_all]
     labels = ["X-Plane\nsample age", "PX4\nsample age", "Serial\nRTT"]
-    ax_b.boxplot(data, tick_labels=labels, showfliers=False)
+    ax_b.boxplot(
+        data,
+        tick_labels=labels,
+        showfliers=False,
+        boxprops={"linewidth": 2.0},
+        whiskerprops={"linewidth": 2.0},
+        capprops={"linewidth": 2.0},
+        medianprops={"linewidth": 2.2},
+    )
     ax_b.set_ylabel("ms")
+    ax_b.set_ylim(0, 80)
     ax_b.grid(True, axis="y", alpha=0.25)
     fig_b.tight_layout()
 
