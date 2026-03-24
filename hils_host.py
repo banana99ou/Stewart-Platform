@@ -440,10 +440,82 @@ class Px4Mavlink:
         if hb is None:
             raise RuntimeError(f"PX4 heartbeat not received within 10s (port={self.port!r}).")
 
-        # Request ATTITUDE at desired rate.
+        print(f"[px4] heartbeat: sys={self.master.target_system} comp={self.master.target_component}")
+
+        # Begin sending GCS heartbeats so PX4 knows a ground station is
+        # connected (required for PX4 to transition out of UNINIT).
+        self._last_gcs_hb_t = 0.0
+        self.send_gcs_heartbeat()
+
+        # Request ATTITUDE at desired rate and consume the ACK so it doesn't
+        # interfere with later command_long ACK matching.
         self._request_message_interval(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, self.attitude_hz)
+        self._wait_command_ack(mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, timeout=3.0)
 
         self.latest: Optional[Px4Attitude] = None
+
+    # PX4 main flight modes (bits 16-23 of custom_mode)
+    PX4_MODE_MANUAL     = 1 << 16   # 65536
+    PX4_MODE_ALTCTL     = 2 << 16
+    PX4_MODE_POSCTL     = 3 << 16
+    PX4_MODE_AUTO       = 4 << 16
+    PX4_MODE_ACRO       = 5 << 16
+    PX4_MODE_OFFBOARD   = 6 << 16
+    PX4_MODE_STABILIZED = 7 << 16   # 458752
+    PX4_MODE_RATTITUDE  = 8 << 16
+
+    _PX4_MODE_MAP = {
+        "manual":     PX4_MODE_MANUAL,
+        "stabilized": PX4_MODE_STABILIZED,
+        "acro":       PX4_MODE_ACRO,
+        "altctl":     PX4_MODE_ALTCTL,
+    }
+
+    def set_mode(self, mode_name: str) -> bool:
+        """Set PX4 flight mode by name (e.g. 'manual', 'stabilized').
+        Returns True if ACK accepted."""
+        custom_mode = self._PX4_MODE_MAP.get(mode_name.lower())
+        if custom_mode is None:
+            logging.warning("Unknown PX4 mode %r (known: %s)",
+                            mode_name, ", ".join(self._PX4_MODE_MAP))
+            return False
+
+        while self.master.recv_match(blocking=False) is not None:
+            pass
+
+        print(f"[px4] SET_MODE -> {mode_name} (custom_mode={custom_mode})")
+        self.master.mav.command_long_send(
+            self.master.target_system,
+            self.master.target_component,
+            self.mavutil.mavlink.MAV_CMD_DO_SET_MODE,
+            0,
+            self.mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+            custom_mode,
+            0, 0, 0, 0, 0,
+        )
+        result = self._wait_command_ack(self.mavutil.mavlink.MAV_CMD_DO_SET_MODE, timeout=3.0)
+        if result is None:
+            print("[px4] SET_MODE: no ACK")
+            return False
+        if result == self.mavutil.mavlink.MAV_RESULT_ACCEPTED:
+            print(f"[px4] SET_MODE {mode_name}: ACCEPTED")
+            return True
+        print(f"[px4] SET_MODE {mode_name}: REJECTED result={result}")
+        return False
+
+    def send_gcs_heartbeat(self) -> None:
+        """Send a GCS heartbeat to PX4 (call at ~1 Hz). PX4 requires this to
+        complete initialization and to avoid GCS-loss failsafe."""
+        now = time.monotonic()
+        if (now - self._last_gcs_hb_t) < 0.9:
+            return
+        self._last_gcs_hb_t = now
+        self.master.mav.heartbeat_send(
+            self.mavutil.mavlink.MAV_TYPE_GCS,
+            self.mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+            0, 0,
+            self.mavutil.mavlink.MAV_STATE_ACTIVE,
+        )
 
     def _request_message_interval(self, msg_id: int, hz: float) -> None:
         interval_us = int(1e6 / hz) if hz > 0 else 0
@@ -457,6 +529,127 @@ class Px4Mavlink:
             0, 0, 0, 0, 0,
         )
 
+    def _wait_command_ack(self, expected_cmd: int, timeout: float = 3.0) -> Optional[int]:
+        """Read messages until a COMMAND_ACK for *expected_cmd* arrives (or timeout).
+        Returns the MAV_RESULT or None on timeout. Skips ACKs for other commands."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            remaining = max(0.001, deadline - time.monotonic())
+            msg = self.master.recv_match(type="COMMAND_ACK", blocking=True, timeout=remaining)
+            if msg is None:
+                continue
+            print(f"[px4] COMMAND_ACK cmd={msg.command} result={msg.result}")
+            if msg.command == expected_cmd:
+                return int(msg.result)
+        return None
+
+    # MAV_STATE constants for readable diagnostics
+    _MAV_STATE_NAMES = {0: "UNINIT", 1: "BOOT", 2: "CALIBRATING", 3: "STANDBY",
+                        4: "ACTIVE", 5: "CRITICAL", 6: "EMERGENCY", 7: "POWEROFF"}
+
+    def _read_heartbeat(self, timeout: float = 3.0):
+        """Return raw HEARTBEAT message or None."""
+        return self.master.recv_match(type="HEARTBEAT", blocking=True, timeout=timeout)
+
+    def _print_heartbeat(self, hb) -> bool:
+        """Print heartbeat info, return armed bool."""
+        armed = bool(hb.base_mode & self.mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+        state_name = self._MAV_STATE_NAMES.get(hb.system_status, str(hb.system_status))
+        main_mode = (hb.custom_mode >> 16) & 0xFF
+        sub_mode = (hb.custom_mode >> 24) & 0xFF
+        print(f"[px4] HEARTBEAT base_mode=0x{hb.base_mode:02X} armed={armed} "
+              f"state={state_name}({hb.system_status}) main_mode={main_mode} sub_mode={sub_mode}")
+        return armed
+
+    def force_arm(self, mode: str = "manual", settle_s: float = 5.0, retries: int = 10) -> bool:
+        """Set flight mode, send GCS heartbeats for settle_s, then try force-arm
+        repeatedly.  Does NOT wait for STANDBY — PX4 may never report it on a
+        bench setup, but will still accept force-arm once it has seen enough
+        GCS heartbeats."""
+        # Phase 1: set mode + pump GCS heartbeats so PX4 recognises a GCS link.
+        print(f"[px4] setting mode={mode}, sending GCS heartbeats for {settle_s:.0f}s ...")
+        self.set_mode(mode)
+        t0 = time.monotonic()
+        while (time.monotonic() - t0) < settle_s:
+            self.send_gcs_heartbeat()
+            hb = self._read_heartbeat(timeout=0.5)
+            if hb is not None:
+                self._print_heartbeat(hb)
+
+        # Phase 2: try force-arm with retries (keep sending GCS heartbeats).
+        cmd = self.mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM
+        for attempt in range(1, retries + 1):
+            self.send_gcs_heartbeat()
+            while self.master.recv_match(blocking=False) is not None:
+                pass
+
+            print(f"[px4] force_arm attempt {attempt}/{retries} "
+                  f"(sys={self.master.target_system} comp={self.master.target_component})")
+            self.master.mav.command_long_send(
+                self.master.target_system,
+                self.master.target_component,
+                cmd,
+                0,      # confirmation
+                1,      # param1: 1 = arm
+                21196,  # param2: force-arm magic value
+                0, 0, 0, 0, 0,
+            )
+
+            result = self._wait_command_ack(cmd, timeout=3.0)
+            if result is None:
+                print(f"[px4] force_arm attempt {attempt}: no ACK received")
+                continue
+            if result == self.mavutil.mavlink.MAV_RESULT_ACCEPTED:
+                print("[px4] force_arm: ACCEPTED")
+                hb = self._read_heartbeat(timeout=3.0)
+                if hb is not None:
+                    armed = self._print_heartbeat(hb)
+                    if armed:
+                        print("[px4] confirmed armed via HEARTBEAT")
+                    else:
+                        print("[px4] WARNING: ACK accepted but HEARTBEAT says NOT armed")
+                else:
+                    print("[px4] WARNING: could not confirm arm state (no heartbeat)")
+                return True
+
+            print(f"[px4] force_arm attempt {attempt}: REJECTED result={result} — retrying in 2s")
+            # Keep pumping GCS heartbeats between retries.
+            for _ in range(4):
+                self.send_gcs_heartbeat()
+                time.sleep(0.5)
+
+        logging.warning("PX4 force-arm: all %d attempts failed", retries)
+        hb = self._read_heartbeat(timeout=2.0)
+        if hb is not None:
+            self._print_heartbeat(hb)
+        return False
+
+    def disarm(self, force: bool = True) -> bool:
+        """Disarm with force flag to bypass in-flight checks."""
+        cmd = self.mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM
+        while self.master.recv_match(blocking=False) is not None:
+            pass
+
+        self.master.mav.command_long_send(
+            self.master.target_system,
+            self.master.target_component,
+            cmd,
+            0,                       # confirmation
+            0,                       # param1: 0 = disarm
+            21196 if force else 0,   # param2: force bypasses in-flight checks
+            0, 0, 0, 0, 0,
+        )
+
+        result = self._wait_command_ack(cmd, timeout=3.0)
+        if result is None:
+            logging.warning("PX4 disarm: no ACK received")
+            return False
+        if result == self.mavutil.mavlink.MAV_RESULT_ACCEPTED:
+            print("[px4] disarm: ACCEPTED")
+            return True
+        logging.warning("PX4 disarm: REJECTED result=%d", result)
+        return False
+
     def poll(self) -> Optional[Px4Attitude]:
         msg = self.master.recv_match(type="ATTITUDE", blocking=False)
         if msg is None:
@@ -467,7 +660,7 @@ class Px4Mavlink:
         pitch = float(np.rad2deg(msg.pitch))
         yaw = float(np.rad2deg(msg.yaw))
 
-        logging.warning("PX4 roll: %s, pitch: %s, yaw: %s", roll, pitch, yaw)
+        # logging.warning("PX4 roll: %s, pitch: %s, yaw: %s", roll, pitch, yaw)
 
         time_boot_ms = getattr(msg, "time_boot_ms", None)
         att = Px4Attitude(
@@ -734,7 +927,7 @@ class XPlaneSender:
         # DO NOT insert an extra record for '48' — it's a header byte, not a DATA group index.
         pkt = self.data_hdr + g8 + g25
         self.sock.sendto(pkt, self.target)
-        logging.warning("Sent controls: elevator: %s, aileron: %s, rudder: %s, throttle: %s", ele, ail, rud, thr)
+        logging.debug("Sent controls: elevator: %s, aileron: %s, rudder: %s, throttle: %s", ele, ail, rud, thr)
         if self._dump_remaining > 0:
             print(f"[xplane_tx] target={self.target} header={self.data_hdr!r} len={len(pkt)} hex={pkt.hex()}")
             self._dump_remaining -= 1
@@ -835,6 +1028,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--px4-att-hz", type=float, default=100.0, help="Requested PX4 ATTITUDE stream rate (Hz).")
     p.add_argument("--px4-dialect", default="common", help="MAVLink dialect (PX4: common).")
     p.add_argument("--no-px4", action="store_true", help="Disable PX4/MAVLink entirely (platform-only run).")
+    p.add_argument("--px4-force-arm", action="store_true",
+                   help="Force-arm PX4 on startup and disarm on exit. "
+                        "Requires COM_DISARM_LAND=-1 and COM_DISARM_PRFLT=-1 on the FC to prevent auto-disarm.")
+    p.add_argument("--px4-arm-mode", default="stabilized", choices=["manual", "stabilized", "acro"],
+                   help="Flight mode to set before arming (default: manual). "
+                        "manual/stabilized only need gyro+accel; avoid modes that require GPS.")
 
     # Control tick
     p.add_argument("--tick-hz", type=float, default=50.0, help="Host control tick (Hz).")
@@ -965,6 +1164,7 @@ def main() -> int:
     base_run_name = f"run-{session_stamp}{suffix}"
 
     # Initialize listeners
+    # Initialize listeners
     xp_rx = XPlaneReceiver(args.xplane_rx_host, int(args.xplane_rx_port))
     xp_tx = None if args.xplane_send == "none" else XPlaneSender(args.xplane_tx_host, int(args.xplane_tx_port), header_mode=str(args.xplane_tx_hdr))
     if xp_tx is not None and int(args.xplane_tx_dump_n) > 0:
@@ -977,6 +1177,11 @@ def main() -> int:
         print("[hils_host] px4: disabled (--no-px4)")
     else:
         print(f"[hils_host] px4_serial={args.px4_com} baud={int(args.px4_baud)} att_hz={float(args.px4_att_hz)}")
+        if bool(args.px4_force_arm):
+            if px4.force_arm(mode=str(args.px4_arm_mode)):
+                print("[hils_host] PX4 force-armed successfully")
+            else:
+                print("[hils_host] WARNING: PX4 force-arm failed — actuator output may not work")
     
     # Start Stewart serial listener
     st = StewartSerial(args.stewart_com, int(args.stewart_baud), float(args.stewart_open_delay_s))
@@ -1011,6 +1216,14 @@ def main() -> int:
             st.send_pose(pose)
         except Exception:
             pass
+
+    def _disarm_px4_now() -> None:
+        """Best-effort PX4 disarm. Never raises."""
+        if px4 is not None and bool(args.px4_force_arm):
+            try:
+                px4.disarm()
+            except Exception:
+                pass
 
     def _postprocess_run_dir(run_dir: Path) -> None:
         """
@@ -1062,7 +1275,7 @@ def main() -> int:
                 "px4": (
                     {"enabled": False}
                     if args.no_px4
-                    else {"enabled": True, "com": args.px4_com, "baud": int(args.px4_baud), "att_hz": float(args.px4_att_hz), "dialect": args.px4_dialect}
+                    else {"enabled": True, "com": args.px4_com, "baud": int(args.px4_baud), "att_hz": float(args.px4_att_hz), "dialect": args.px4_dialect, "force_arm": bool(args.px4_force_arm), "arm_mode": str(args.px4_arm_mode)}
                 ),
                 "pid": {
                     "sp_deg": {"roll": float(args.sp_roll_deg), "pitch": float(args.sp_pitch_deg), "yaw": float(args.sp_yaw_deg)},
@@ -1163,6 +1376,10 @@ def main() -> int:
                         if gap_ms > max_tick_gap_ms:
                             max_tick_gap_ms = float(gap_ms)
                     t_prev_tick_ns = t_tick
+
+                    # Send periodic GCS heartbeat to prevent PX4 GCS-loss failsafe.
+                    if px4 is not None:
+                        px4.send_gcs_heartbeat()
 
                     # Poll inputs (drain buffers)
                     while True:
@@ -1467,17 +1684,17 @@ def main() -> int:
 
     except KeyboardInterrupt:
         _send_neutral_pose_now()
+        # _disarm_px4_now()
         print("\n[hils_host] stopped.")
         return 0
     finally:
         try:
-            # Safety net: ensure platform pose reset even if we exited before per-run finally.
             _send_neutral_pose_now()
+            # _disarm_px4_now()
             st.close()
             xp_rx.close()
             if xp_tx is not None:
                 xp_tx.close()
-            
         except Exception:
             pass
 
