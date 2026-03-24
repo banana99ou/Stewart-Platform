@@ -221,12 +221,29 @@ def fig5_latency(
         _band(ax_a, ack_t, ack_y,
               ack_edges, ack_centers, "tab:green", "Serial RTT", "-.")
 
+        e2e_mask = ack_mask & np.isfinite(run_hero.e2e_xp_ms_by_ack)
+        if np.any(e2e_mask):
+            e2e_t = run_hero.ack_t_s[e2e_mask]
+            e2e_y = run_hero.e2e_xp_ms_by_ack[e2e_mask]
+            e2e_edges = np.arange(e2e_t.min(), e2e_t.max() + BIN_S, BIN_S)
+            e2e_centers = 0.5 * (e2e_edges[:-1] + e2e_edges[1:])
+            _band(ax_a, e2e_t, e2e_y,
+                  e2e_edges, e2e_centers, "tab:red", "End-to-end (XP rx→ACK)", ":")
+
     ax_a.set_xlabel("time (s) from run start")
     ax_a.set_ylabel("ms")
-    ax_a.set_ylim(0, 80)
+    ax_a.set_xlim(float(t_an.min()), float(t_an.max()))
+    ax_a.set_ylim(0, 120)
     ax_a.grid(True, alpha=0.25)
-    ax_a.legend(loc="upper right")
-    fig_a.tight_layout()
+    ax_a.legend(
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1.0),
+        borderaxespad=0.0,
+        fontsize=11,
+        framealpha=0.9,
+    )
+    fig_a.subplots_adjust(right=0.78)
+    fig_a.tight_layout(rect=(0.0, 0.0, 0.78, 1.0))
 
     out_a = OUT_DIR / "Fig5a_Latency_TimeSeries.png"
     fig_a.savefig(out_a, dpi=DPI)
@@ -239,19 +256,26 @@ def fig5_latency(
         [r.px4_age_ms[r.analysis_mask] for r in runs_baseline])
 
     serial_rtt_parts: list[np.ndarray] = []
+    e2e_parts: list[np.ndarray] = []
     for r in runs_baseline:
         if r.ack_t_s.size == 0:
             continue
         ack_mask = (np.isfinite(r.ack_t_s)
                     & (r.ack_t_s >= float(SKIP_FIRST_S)))
         serial_rtt_parts.append(r.serial_rtt_ms_by_ack[ack_mask])
+        e2e_mask = ack_mask & np.isfinite(r.e2e_xp_ms_by_ack)
+        if np.any(e2e_mask):
+            e2e_parts.append(r.e2e_xp_ms_by_ack[e2e_mask])
     serial_rtt_all = (np.concatenate(serial_rtt_parts)
                       if serial_rtt_parts
                       else np.zeros(0, dtype=float))
+    e2e_all = (np.concatenate(e2e_parts)
+               if e2e_parts
+               else np.zeros(0, dtype=float))
 
     fig_b, ax_b = plt.subplots(1, 1, figsize=(FIG5B_W, 3.8))
-    data = [xp_age_all, px_age_all, serial_rtt_all]
-    labels = ["X-Plane\nsample age", "PX4\nsample age", "Serial\nRTT"]
+    data = [xp_age_all, px_age_all, serial_rtt_all, e2e_all]
+    labels = ["X-Plane\nsample age", "PX4\nsample age", "Serial\nRTT", "End-to-end\n(XP rx→ACK)"]
     ax_b.boxplot(
         data,
         tick_labels=labels,
@@ -262,7 +286,7 @@ def fig5_latency(
         medianprops={"linewidth": 2.2},
     )
     ax_b.set_ylabel("ms")
-    ax_b.set_ylim(0, 80)
+    ax_b.set_ylim(0, 110)
     ax_b.grid(True, axis="y", alpha=0.25)
     fig_b.tight_layout()
 
