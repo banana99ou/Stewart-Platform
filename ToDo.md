@@ -29,27 +29,29 @@ Priorities:
 - [ ] **Time alignment method (so “error” is meaningful)**
   - [ ] Estimate effective delay between X-Plane and PX4 attitude (e.g., cross-correlation) and compensate before computing stats
   - [ ] Report both “raw” and “aligned” error summary (at least in internal plots)
-- [ ] **Add per-run PX4:stewart mounting bias to Postprocessing_run.py**
-  - [ ] Estimate roll/pitch bias btw PX4 and platform pose using the `hold_0` window (or another steady window) per run
-  - [ ] Report both raw and bias-corrected tracking metrics (mean/RMS/max/std)
+- [X] **Add per-run PX4:stewart mounting bias to Postprocessing_run.py**
+  - [X] Estimate roll/pitch bias btw PX4 and platform pose using the `hold_0` window (or another steady window) per run
+  - [X] Report both raw and bias-corrected tracking metrics (mean/RMS/max/std)
 - [X] **Edit post-processing to show saturation statistics**
   - [X] % time saturated (sat flag)
   - [X] α distribution (histogram + summary stats)
   - [X] Error conditioned on α=1 vs α<1 (mean/RMS/max/std)
 - [ ] **Metric pack (numbers to quote in text)**
   - [ ] Attitude error per axis: mean / RMS / max / std (after time alignment)
-  - [ ] End-to-end latency: mean / RMS / max / std
-  - [ ] Saturation rate: % time saturated + distribution of α
-- [ ] **Saturation impact analysis**
-  - [ ] Condition metrics on α=1 vs α<1 (error/latency differences)
-  - [ ] Plot α(t) alongside command magnitude to show graceful degradation
+  - [X] End-to-end latency: mean / RMS / max / std
+  - [X] Saturation rate: % time saturated + distribution of α
+- [X] **Saturation impact analysis**
+  - [X] Condition metrics on α=1 vs α<1 (error/latency differences)
+  - [X] Plot α(t) alongside command magnitude to show graceful degradation
 
 ### P0.4 — Turn results into conference artifacts (depends on P0.2–P0.3)
 - [ ] **Figure pack (minimum set for abstract/paper)**
-  - [ ] Fig. 1: system block diagram (protocols + rates annotated)
-  - [ ] Fig. 2: time series overlay — X-Plane attitude vs PX4 attitude (+ error plot)
-  - [ ] Fig. 3: latency breakdown (end-to-end + per-layer if available)
-  - [ ] Table 1: update rates + interfaces (UDP/USB serial/MAVLink) + payload formats
+  - [X] Fig. 1: system block diagram (protocols + rates annotated)
+  - [X] Fig. 2: time series overlay — X-Plane attitude vs PX4 attitude
+  - [X] Fig. 3: pitch tracking error time series (kept as a separate figure rather than appended to Fig. 2)
+  - [ ] Latency breakdown figure: only latency time-series/distribution figures exist (`Fig5a`, `Fig5b`); no per-layer breakdown figure found
+  - [ ] Table 1: update rates + interfaces (UDP/USB serial/MAVLink) + payload formats as a dedicated table
+  - [ ] Figure source data in repo: `paper/fig/FigGen_manifest.json` points to `/Volumes/SHGP31-5/...`, and `logs/` is absent in this checkout
 - [ ] **Define the “result narrative” in 3 claims (one paragraph)**
   - [ ] Physical closed-loop HILS is achieved (sim → motion → IMU/FC → sim)
   - [ ] Tracking fidelity is quantified (error stats) within feasible envelope
@@ -59,6 +61,29 @@ Priorities:
   - [ ] Side-by-side visualization (X-Plane capture + real platform video)
   - [ ] Time-series plots (angles + angular rates if available)
   - [ ] Limitations/special findings: saturation, latency/jitter, missing aerodynamics, anomalies
+
+### P0.5 — Presentation revision per PI feedback (2026-03-20)
+
+See `doc/Prof_feedback_2026-03-20_presentation.md` for full text.
+
+- [ ] **Decide framing direction** (PI says either is fine — pick whichever is easier to discuss with audience)
+- [ ] **Storytelling focus: move detail into reference tables**
+  - [ ] Consolidate specs (working area, z position, saturator, rates/interfaces) into summary table slide(s)
+  - [ ] Strip narrated detail from script; oral delivery should focus on project story + audience interest
+- [ ] **Add photos + scenario-driven demo video**
+  - [ ] Record trim-transition run video with X-Plane side-by-side
+  - [ ] Video should narrate specific scenario motion, not just "look it moves"
+  - [ ] Add hardware photos to slides where currently missing
+- [ ] **Fix font / readability**
+  - [ ] Switch to bolder, projector-robust font in `generate_presentation.py`
+  - [ ] Increase base font sizes; only non-essential info stays small
+- [ ] **Split slide 5 (system block diagram) into per-block detail slides**
+  - [ ] Each block (X-Plane, Host/Simulink, Stewart Platform, PX4) gets its own slide
+  - [ ] Each sub-slide: representative photo + data exchanged with other blocks
+- [ ] **Improve graph legibility**
+  - [ ] Increase line width in `Fig_Gen.py`
+  - [ ] Add markers / dashed lines where traces overlap (especially Fig2 pitch overlay, Fig5a latency)
+- [ ] **Add Korean title to cover slide**
 
 ### P0 — Completed prerequisites (already done)
 - [X] **Implement PX4 ↔ Simulink MAVLink USB interface**
@@ -93,13 +118,13 @@ Priorities:
 ## P1 — Validation + credibility improvements
 
 - [ ] **IK accuracy test (proxy via PX4 IMU since no encoders)**
-  - [ ] Static pose holds at multiple setpoints
+  - [X] Static pose holds at multiple setpoints
   - [ ] Quantify repeatability/hysteresis
   - [ ] Document methodology + results
 - [ ] **Document system architecture + comms + timing (Q&A readiness)**
-  - [ ] Block diagram of X-Plane / Simulink / Stewart MCU / PX4 data flow
-  - [ ] Protocol summary (UDP, USB serial, MAVLink over USB serial)
-  - [ ] Identify update rates: Simulink `dt/Ts`, effective command rate, X-Plane rate, MAVLink rate
+  - [X] Block diagram of X-Plane / Simulink / Stewart MCU / PX4 data flow
+  - [X] Protocol summary (UDP, USB serial, MAVLink over USB serial)
+  - [X] Identify update rates: Simulink `dt/Ts`, effective command rate, X-Plane rate, MAVLink rate
   - [ ] Coordinate/rotation representation and transforms (Euler/quaternion etc.)
   - [ ] Initial calibration: reference attitude definition + procedure
 - [ ] **Optional experiment: controller comparison (PID vs sliding mode, etc.)**
@@ -109,14 +134,16 @@ Priorities:
 
 ### P1 — Extra analyses (high insight, low risk)
 - [ ] **Repeatability / hysteresis**
-  - [ ] Repeat same trim transition N times; plot ensemble mean ± std band
+  - [x] Repeat same trim transition N times; plot ensemble mean ± std band
   - [ ] Report run-to-run variation (std, max-min)
 - [ ] **Cross-axis coupling**
   - [ ] Command pure pitch/roll; quantify leakage into other axes (coupling matrix estimate)
   - [ ] Compare coupling in mid-range vs near workspace boundary
 - [ ] **Bandwidth characterization (optional but strong)**
-  - [ ] Small-amplitude sine input sweep (no saturation); estimate gain/phase vs frequency
-  - [ ] Quote effective attitude bandwidth / phase lag
+  - [ ] Implement single-axis sine-sweep bandwidth measurement script
+  - [ ] Use small unsaturated amplitude (about 0.5-2 deg) and sweep roughly 0.1-5 Hz
+  - [ ] Log command and measured attitude on a common host clock (`cmd_pitch -> px4_pitch`, optional external reference)
+  - [ ] Estimate gain/phase vs frequency and report effective attitude bandwidth (-3 dB) plus representative phase lag (e.g. 0.5 / 1 / 2 Hz)
 - [ ] **Robustness stats**
   - [ ] Report packet drop, parse-fail, watchdog counts over long run (e.g., 10–30 min)
 
