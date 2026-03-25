@@ -1,6 +1,8 @@
 """Generate KSAS Spring 2026 conference PowerPoint from the blue Canva template."""
 
 import os
+import subprocess
+import tempfile
 from pptx import Presentation
 from pptx.util import Inches, Pt, Cm
 from pptx.dml.color import RGBColor
@@ -123,11 +125,133 @@ def _bullet(tf, en, kr=None, sz=20, sp=Pt(10)):
 
 def _img(sl, path, l, t, width=None, height=None):
     if os.path.exists(path):
-        return sl.shapes.add_picture(path, l, t, width, height)
-    print("path not found", path)
+        try:
+            return sl.shapes.add_picture(path, l, t, width, height)
+        except ValueError as exc:
+            # Some phone-camera JPGs are MPO containers. Convert to PNG fallback.
+            if "unsupported image format" in str(exc):
+                try:
+                    from PIL import Image
+                    with Image.open(path) as im:
+                        im = im.convert("RGB")
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                            tmp_path = tmp.name
+                        im.save(tmp_path, format="PNG")
+                    try:
+                        return sl.shapes.add_picture(tmp_path, l, t, width, height)
+                    finally:
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+                except Exception as conv_exc:
+                    print("image conversion failed", path, conv_exc)
+            print("image insert failed", path, exc)
+    if not os.path.exists(path):
+        print("path not found", path)
+    else:
+        print("using placeholder for image", path)
     box = _rr(sl, l, t, width or Inches(6), height or Inches(4), LIGHT, GREY)
     _set(box, f"[{os.path.basename(path)}]", 20, GREY, align=PP_ALIGN.CENTER)
     return box
+
+
+def _video(sl, video_path, l, t, width, height, poster_path=None):
+    if not os.path.exists(video_path):
+        print("video path not found", video_path)
+        box = _rr(sl, l, t, width, height, LIGHT, GREY)
+        _set(box, f"[{os.path.basename(video_path)}]", 20, GREY, align=PP_ALIGN.CENTER)
+        return box
+
+    # Some python-pptx builds can fail on movie insertion; keep slide generation resilient.
+    try:
+        if poster_path and os.path.exists(poster_path):
+            try:
+                return sl.shapes.add_movie(
+                    video_path,
+                    l,
+                    t,
+                    width,
+                    height,
+                    poster_frame_image=poster_path,
+                    mime_type="video/mp4",
+                )
+            except ValueError as exc:
+                # Retry without poster when camera JPG is unsupported (e.g., MPO).
+                if "unsupported image format" not in str(exc):
+                    raise
+        return sl.shapes.add_movie(video_path, l, t, width, height, mime_type="video/mp4")
+    except Exception as exc:
+        print("video embed failed", video_path, exc)
+        box = _rr(sl, l, t, width, height, LIGHT, GREY)
+        _set(box, "[Insert demo video manually]", 20, GREY, align=PP_ALIGN.CENTER)
+        return box
+
+
+def _export_rotated_png(path, rotate_cw_deg):
+    """Write a PNG copy of *path* rotated *rotate_cw_deg* clockwise (0, 90, 180, 270)."""
+    from PIL import Image
+
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        if rotate_cw_deg == 90:
+            im = im.transpose(Image.Transpose.ROTATE_270)
+        elif rotate_cw_deg == 180:
+            im = im.transpose(Image.Transpose.ROTATE_180)
+        elif rotate_cw_deg == 270:
+            im = im.transpose(Image.Transpose.ROTATE_90)
+        elif rotate_cw_deg != 0:
+            raise ValueError(f"unsupported rotate_cw_deg={rotate_cw_deg}")
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp_path = tmp.name
+        im.save(tmp_path, format="PNG")
+    return tmp_path
+
+
+def _extract_video_poster_frame(video_path, timestamp_s=1.0):
+    """Extract a PNG poster frame from a video using ffmpeg."""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp_path = tmp.name
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(timestamp_s),
+            "-i",
+            video_path,
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            tmp_path,
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+            return tmp_path
+    except Exception as exc:
+        print("video poster extraction failed", video_path, exc)
+    if "tmp_path" in locals() and os.path.exists(tmp_path):
+        os.unlink(tmp_path)
+    return None
+
+
+def _add_picture_fit_center(sl, path, l, t, box_w, box_h):
+    """Place image in box (l,t,box_w,box_h), preserve aspect ratio, center."""
+    from PIL import Image
+
+    with Image.open(path) as im:
+        iw, ih = im.size
+    l_in = _emu_to_in(int(l))
+    t_in = _emu_to_in(int(t))
+    bw_in = _emu_to_in(int(box_w))
+    bh_in = _emu_to_in(int(box_h))
+    s = min(bw_in / iw, bh_in / ih)
+    w_in = iw * s
+    h_in = ih * s
+    left_in = l_in + (bw_in - w_in) / 2
+    top_in = t_in + (bh_in - h_in) / 2
+    return sl.shapes.add_picture(
+        path, Inches(left_in), Inches(top_in), width=Inches(w_in), height=Inches(h_in)
+    )
 
 
 def _emu_to_in(v):
@@ -464,27 +588,74 @@ _sn(sl, 3)
 sl = make_slide(prs, blank)
 slide_title(sl, "System in Action")
 
-pw = Inches(7.8)
-ph = Inches(5.0)
-photo = _rr(sl, Inches(1.5), Inches(3.4), pw, ph, LIGHT, GREY)
-photo.text_frame.word_wrap = True
-photo.text_frame.margin_top = Inches(2.0)
-photo.text_frame.margin_left = Pt(20)
-_set(photo, "[Insert hardware photo]", 22, GREY, align=PP_ALIGN.CENTER)
-_ko(photo.text_frame, "스튜어트 플랫폼 + PX4 탑재 사진",
-    20, Pt(8), PP_ALIGN.CENTER)
+photo_path = os.path.join(FIG, "PX4_on_STP.JPG")
+video_path = os.path.join(FIG, "Demo_0324_vid.mp4")
 
-video = _rr(sl, Inches(10.5), Inches(3.4), pw, ph, LIGHT, GREY)
-video.text_frame.word_wrap = True
-video.text_frame.margin_top = Inches(2.0)
-video.text_frame.margin_left = Pt(20)
-_set(video, "[Insert demo video]", 22, GREY, align=PP_ALIGN.CENTER)
-_ko(video.text_frame, "Trim transition 시나리오 구동 영상",
-    20, Pt(8), PP_ALIGN.CENTER)
+# Video is the focus on this slide; make it dominant and keep the hardware photo secondary.
+video_left = Inches(1.45)
+video_top = Inches(3.0)
+video_w = Inches(12.8)
+video_h = Inches(6.35)
 
-_callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
+photo_card_left = Inches(14.7)
+photo_card_top = Inches(3.2)
+photo_card_w = Inches(3.55)
+photo_card_h = Inches(5.95)
+
+photo_png = None
+poster_png = None
+try:
+    poster_png = _extract_video_poster_frame(video_path, timestamp_s=1.0)
+    photo_png = _export_rotated_png(photo_path, 90)
+
+    _video(
+        sl,
+        video_path,
+        video_left,
+        video_top,
+        video_w,
+        video_h,
+        poster_path=poster_png or photo_png,
+    )
+
+    _card(sl, photo_card_left, photo_card_top, photo_card_w, photo_card_h, WHITE)
+    ptb = _tb(sl, photo_card_left, photo_card_top - Inches(0.45), photo_card_w, Inches(0.35))
+    p = ptb.text_frame.paragraphs[0]
+    p.text = "Hardware Setup"
+    p.font.size = Pt(18)
+    p.font.color.rgb = BLUE
+    p.font.bold = True
+    p.alignment = PP_ALIGN.CENTER
+    _add_picture_fit_center(
+        sl,
+        photo_png,
+        photo_card_left + Inches(0.12),
+        photo_card_top + Inches(0.12),
+        photo_card_w - Inches(0.24),
+        photo_card_h - Inches(0.72),
+    )
+    cap = _tb(
+        sl,
+        photo_card_left + Inches(0.15),
+        photo_card_top + photo_card_h - Inches(0.58),
+        photo_card_w - Inches(0.3),
+        Inches(0.4),
+    )
+    cp = cap.text_frame.paragraphs[0]
+    cp.text = "Stewart platform with PX4-mounted airframe"
+    cp.font.size = Pt(14)
+    cp.font.color.rgb = GREY
+    cp.font.bold = True
+    cp.alignment = PP_ALIGN.CENTER
+finally:
+    if photo_png and os.path.exists(photo_png):
+        os.unlink(photo_png)
+    if poster_png and os.path.exists(poster_png):
+        os.unlink(poster_png)
+
+_callout(sl, Inches(1.9), Inches(9.58), Inches(12.0), Inches(0.62),
          "X-Plane sim attitude \u2192 Stewart platform motion \u2192 "
-         "PX4 IMU sensing \u2192 closed-loop", 20)
+         "PX4 IMU sensing \u2192 closed-loop", 16)
 
 _sn(sl, 4)
 
@@ -968,7 +1139,7 @@ questions = [
     ("Effective bandwidth?",
      "Placeholder: BW ~X.X Hz, phase\n~Y\u00b0 @ 1 Hz from sine sweep.\nCurrent data: E2E ~51 ms. \u2192 Sl 13"),
     ("Open-loop platform \u2014 pose accuracy?",
-     "Hobby servos, no encoder. Inclinometer:\n~2.1\u00b0 roll, ~1.5\u00b0 pitch. \u2192 Sl 3"),
+     "Hobby servos, no encoder. Inclinometer:\n~0.1\u00b0 roll, ~0.5\u00b0 pitch. \u2192 Sl 3"),
     ("What is mounting bias?",
      "~1.8\u00b0 from FC alignment. Stable\n(\u03c3 \u2248 0.2\u00b0), calibrated out. \u2192 Sl 12"),
     ("How repeatable across runs?",
