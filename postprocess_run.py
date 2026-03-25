@@ -461,7 +461,7 @@ def main() -> int:
     has_phase = bool(np.any(np.array([p != "" for p in scenario_phase], dtype=bool)))
     bias_window_mask = None
     if has_phase:
-        bias_window_mask = analysis_mask & (scenario_phase == "hold_return")
+        bias_window_mask = analysis_mask & (scenario_phase == "hold_0")
         # If pid_enabled is present, require it (avoids startup chaos / disabled control injection).
         if has_pid_enabled:
             bias_window_mask = bias_window_mask & np.isfinite(pid_enabled) & (pid_enabled > 0.5)
