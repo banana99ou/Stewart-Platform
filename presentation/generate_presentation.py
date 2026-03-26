@@ -591,22 +591,48 @@ slide_title(sl, "System in Action")
 photo_path = os.path.join(FIG, "PX4_on_STP.JPG")
 video_path = os.path.join(FIG, "Demo_0324_vid.mp4")
 
-# Video is the focus on this slide; make it dominant and keep the hardware photo secondary.
-video_left = Inches(1.45)
-video_top = Inches(3.0)
-video_w = Inches(12.8)
-video_h = Inches(6.35)
+# Lead with the hardware photo on the left, then let the demo video dominate the slide.
+photo_card_left = Inches(1.95)
+photo_card_top = Inches(3.35)
+photo_card_w = Inches(3.35)
+photo_card_h = Inches(5.45)
 
-photo_card_left = Inches(14.7)
-photo_card_top = Inches(3.2)
-photo_card_w = Inches(3.55)
-photo_card_h = Inches(5.95)
+video_left = Inches(5.65)
+video_top = photo_card_top
+video_w = Inches(12.15)
+video_h = photo_card_h
 
 photo_png = None
 poster_png = None
 try:
     poster_png = _extract_video_poster_frame(video_path, timestamp_s=1.0)
     photo_png = _export_rotated_png(photo_path, 90)
+
+    ptb = _tb(sl, photo_card_left, photo_card_top - Inches(0.45), photo_card_w, Inches(0.35))
+    p = ptb.text_frame.paragraphs[0]
+    p.text = "1. Hardware Setup"
+    p.font.size = Pt(18)
+    p.font.color.rgb = BLUE
+    p.font.bold = True
+    p.alignment = PP_ALIGN.CENTER
+
+    vtb = _tb(sl, video_left, video_top - Inches(0.45), video_w, Inches(0.35))
+    p = vtb.text_frame.paragraphs[0]
+    p.text = "2. End-to-End Demo Video"
+    p.font.size = Pt(20)
+    p.font.color.rgb = BLUE
+    p.font.bold = True
+    p.alignment = PP_ALIGN.CENTER
+
+    _card(sl, photo_card_left, photo_card_top, photo_card_w, photo_card_h, WHITE)
+    _add_picture_fit_center(
+        sl,
+        photo_png,
+        photo_card_left,
+        photo_card_top,
+        photo_card_w,
+        photo_card_h,
+    )
 
     _video(
         sl,
@@ -617,45 +643,22 @@ try:
         video_h,
         poster_path=poster_png or photo_png,
     )
-
-    _card(sl, photo_card_left, photo_card_top, photo_card_w, photo_card_h, WHITE)
-    ptb = _tb(sl, photo_card_left, photo_card_top - Inches(0.45), photo_card_w, Inches(0.35))
-    p = ptb.text_frame.paragraphs[0]
-    p.text = "Hardware Setup"
-    p.font.size = Pt(18)
-    p.font.color.rgb = BLUE
-    p.font.bold = True
-    p.alignment = PP_ALIGN.CENTER
-    _add_picture_fit_center(
-        sl,
-        photo_png,
-        photo_card_left + Inches(0.12),
-        photo_card_top + Inches(0.12),
-        photo_card_w - Inches(0.24),
-        photo_card_h - Inches(0.72),
-    )
-    cap = _tb(
-        sl,
-        photo_card_left + Inches(0.15),
-        photo_card_top + photo_card_h - Inches(0.58),
-        photo_card_w - Inches(0.3),
-        Inches(0.4),
-    )
-    cp = cap.text_frame.paragraphs[0]
-    cp.text = "Stewart platform with PX4-mounted airframe"
-    cp.font.size = Pt(14)
-    cp.font.color.rgb = GREY
-    cp.font.bold = True
-    cp.alignment = PP_ALIGN.CENTER
 finally:
     if photo_png and os.path.exists(photo_png):
         os.unlink(photo_png)
     if poster_png and os.path.exists(poster_png):
         os.unlink(poster_png)
 
-_callout(sl, Inches(1.9), Inches(9.58), Inches(12.0), Inches(0.62),
-         "X-Plane sim attitude \u2192 Stewart platform motion \u2192 "
-         "PX4 IMU sensing \u2192 closed-loop", 16)
+_callout(
+    sl,
+    Inches(2.0),
+    Inches(8.95),
+    Inches(16.0),
+    Inches(1.0),
+    "Start with the PX4-on-platform hardware setup, then show the integrated "
+    "closed-loop demo video.",
+    20,
+)
 
 _sn(sl, 4)
 
