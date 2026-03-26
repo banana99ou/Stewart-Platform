@@ -207,7 +207,7 @@ def fig5_latency(
                         color=color, alpha=0.18)
 
     _band(ax_a, t_an, run_hero.xp_age_ms[m],
-          bin_edges, bin_centers, "tab:blue", "X-Plane sample age", "-")
+          bin_edges, bin_centers, "tab:blue", "XP sample age", "-")
     _band(ax_a, t_an, run_hero.px4_age_ms[m],
           bin_edges, bin_centers, "tab:orange", "PX4 sample age", "--")
 
@@ -228,22 +228,15 @@ def fig5_latency(
             e2e_edges = np.arange(e2e_t.min(), e2e_t.max() + BIN_S, BIN_S)
             e2e_centers = 0.5 * (e2e_edges[:-1] + e2e_edges[1:])
             _band(ax_a, e2e_t, e2e_y,
-                  e2e_edges, e2e_centers, "tab:red", "End-to-end (XP rx→ACK)", ":")
+                  e2e_edges, e2e_centers, "tab:red", "E2E (XP rx→ACK)", ":")
 
     ax_a.set_xlabel("time (s) from run start")
     ax_a.set_ylabel("ms")
     ax_a.set_xlim(float(t_an.min()), float(t_an.max()))
     ax_a.set_ylim(0, 120)
     ax_a.grid(True, alpha=0.25)
-    ax_a.legend(
-        loc="upper left",
-        bbox_to_anchor=(1.01, 1.0),
-        borderaxespad=0.0,
-        fontsize=11,
-        framealpha=0.9,
-    )
-    fig_a.subplots_adjust(right=0.78)
-    fig_a.tight_layout(rect=(0.0, 0.0, 0.78, 1.0))
+    ax_a.legend(loc="upper right", fontsize=11)
+    fig_a.tight_layout()
 
     out_a = OUT_DIR / "Fig5a_Latency_TimeSeries.png"
     fig_a.savefig(out_a, dpi=DPI)
