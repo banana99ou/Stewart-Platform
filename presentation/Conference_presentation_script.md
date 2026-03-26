@@ -9,13 +9,13 @@ Slide numbers match the current deck (17 slides).
 
 ## 슬라이드 1 — 제목
 
-안녕하세요, 국민대학교 미래모빌리티제어연구실 석사과정 정현용입니다. 오늘은 스튜어트 플랫폼 기반 물리적 폐루프 HILS를 이용해, PX4 추정기를 실제 관성 운동으로 어떻게 검증할 수 있는지 말씀드리겠습니다.
+안녕하세요, 국민대학교 미래모빌리티제어연구실 석사과정 정현용입니다.
 
-간단히 말씀드리면, X-Plane 시뮬레이터, 실물 스튜어트 플랫폼, 실물 PX4 비행 제어기를 하나의 루프로 연결했습니다. 시뮬레이터가 플랫폼을 물리적으로 움직이고, PX4가 그 움직임을 감지해서, 그 측정값이 다시 시뮬레이션으로 돌아가는 구조입니다.
+대부분의 HILS에서 비행 제어기의 IMU는 실제로 움직이지 않습니다. 저희는 그것을 바꿨습니다. X-Plane 시뮬레이터, 실물 스튜어트 플랫폼, 실물 PX4를 하나의 루프로 연결해서, 시뮬레이션 자세가 실제 물리적 운동으로 바뀌고, PX4가 그 운동을 감지하고, 그 측정값이 다시 시뮬레이션으로 돌아가는 구조를 만들었습니다.
 
-핵심 질문은, PX4의 탑재 추정기가 합성 IMU 데이터가 아닌 실제 물리적 운동에 의해 구동될 때 어떻게 반응하는가입니다. 이 시스템은 바로 그것을 검증하기 위한 플랫폼입니다.
+핵심 질문은 하나입니다: PX4 추정기가 실제 관성 운동을 경험할 때, 어떤 응답을 보이는가?
 
-연구 동기부터 시스템 구성, 실험 내용, 측정 결과, 향후 계획까지 순서대로 말씀드리겠습니다.
+오늘은 이 시스템의 구조, 기준선 실험 결과, 그리고 정량적으로 확인한 가능성과 한계를 함께 보여드리겠습니다.
 
 `>> NEXT SLIDE`
 
@@ -25,7 +25,7 @@ Slide numbers match the current deck (17 slides).
 
 기존 HILS도 강력합니다. 하지만 대부분의 구성에서 비행 제어기는 합성된 센서 데이터를 받고, 자세는 화면이나 로그 파일로 확인하죠. IMU가 실제로 움직이지는 않습니다.
 
-저희가 원한 것은 물리적 현실감입니다. 비행 제어기의 IMU가 실제 관성 운동을 겪도록 하자는 것이 출발점이었습니다.
+저희가 원한 것은 물리적 현실감입니다. 비행 제어기의 IMU가 실제 관성 운동을 겪고, 그 결과 조종면이 반응하는 것까지 눈으로 확인할 수 있는 환경 — 이것이 출발점이었습니다.
 
 이 접근법 자체는 고정익에만 한정되지 않습니다 — 자세 동역학이 중요한 비행체라면 같은 원리를 적용할 수 있습니다. 다만 이번 연구에서는 고정익을 첫 번째 실증 대상으로 선택했습니다.
 
@@ -37,19 +37,21 @@ Slide numbers match the current deck (17 slides).
 
 그러면 구체적으로 뭐가 새로운 걸까요?
 
-핵심은 PX4의 추정기가 합성 신호가 아니라 실제 물리적 움직임에 반응한다는 점입니다. 기존 HILS에서는 IMU 데이터가 소프트웨어로 생성되지만, 이 시스템에서는 실제 관성 운동을 추정기가 직접 경험합니다. 이것이 검증의 질을 바꿉니다.
+핵심은 PX4의 추정기가 합성 신호가 아니라 실제 물리적 움직임에 반응한다는 점입니다. 기존 HILS에서는 IMU 데이터가 소프트웨어로 생성되지만, 이 시스템에서는 실제 관성 운동을 추정기가 직접 경험합니다.
 
-다만 미리 말씀드리면, 이 시스템이 기존 HILS나 실제 비행 시험을 대체하지는 않습니다. 플랫폼의 작업 영역은 유한하고, 구동 한계가 있고, 공기역학적 하중도 재현하지 못합니다. 보완적 검증 수단으로 보시면 됩니다 — 다만 순수 소프트웨어 루프로는 얻을 수 없는 물리적 근거를 추가한다는 점이 핵심입니다.
+이를 위해 스튜어트 플랫폼이 시뮬레이터와 비행 제어기 사이의 물리적 연결 고리 역할을 합니다. 소프트웨어 자세 명령을 실제 6자유도 운동으로 바꿔서, PX4 IMU가 실제로 움직이게 합니다.
 
-스튜어트 플랫폼은 이 시스템에서 시뮬레이터와 비행 제어기 사이의 물리적 연결 고리 역할을 합니다 — 소프트웨어 자세 명령을 실제 6자유도 운동으로 바꿔서 PX4 IMU가 실제로 움직이게 합니다. 구체적인 아키텍처는 바로 다음에 보여드리겠습니다.
+이 물리적 자극이 추가됨으로써 무엇이 드러나는지, 실제 데이터로 보여드리겠습니다. 먼저 시스템이 작동하는 모습부터 보겠습니다.
 
 `>> NEXT SLIDE`
 
 ## 슬라이드 4 — 시스템 구동 모습
 
-[사진 및/또는 데모 영상]
+[데모 영상 재생]
 
-실제 시스템이 작동하는 모습입니다. 스튜어트 플랫폼이 시뮬레이션 자세에 맞춰 움직이고, 위에 탑재된 PX4가 그 움직임을 실시간으로 감지하고 있습니다.
+지금 보시는 것은 기준선 실험인 트림 전환 시나리오입니다. X-Plane이 피치 0도에서 +5도로 전환하는 명령을 내리면, 스튜어트 플랫폼이 그에 맞춰 기울어지고, 위에 탑재된 PX4가 이 움직임을 실시간으로 감지합니다.
+
+잠시 후 결과 슬라이드에서 이 동작에 대응하는 추종 데이터를 보여드리겠습니다. 먼저 시스템 구조를 살펴보겠습니다.
 
 `>> NEXT SLIDE`
 
@@ -74,9 +76,7 @@ Slide numbers match the current deck (17 slides).
 
 [구조도에서 1번 블록 강조]
 
-루프의 출발점은 X-Plane입니다. 여기서 동역학이 연산되고, 트림 전환 같은 시나리오를 반복 실행할 수 있는 환경을 제공합니다. 기체 상태는 UDP로 호스트에 전송됩니다.
-
-기존에는 X-Plane 안에서 루프가 닫혔지만, 이 구조에서는 PX4가 측정한 자세를 호스트의 PID 제어기가 받아 조종면 명령으로 변환하고, 그 명령이 X-Plane에 주입됩니다. 그래서 시뮬레이션 결과 자체가 물리적 루프의 영향을 받게 됩니다.
+X-Plane이 동역학을 연산하고, UDP로 기체 상태를 호스트에 전송합니다. 기존에는 이 안에서 루프가 닫혔지만, 이 구조에서는 PX4 자세가 물리 경로를 거쳐 되돌아옵니다.
 
 `>> NEXT SLIDE`
 
@@ -84,11 +84,7 @@ Slide numbers match the current deck (17 slides).
 
 [구조도에서 2번 블록 강조]
 
-Python 호스트는 시스템 전체의 통합 허브입니다.
-
-X-Plane에서 UDP로 기체 상태를, PX4에서 MAVLink/USB로 자세 추정값을 받습니다. 시뮬레이터 상태를 플랫폼 pose 명령으로 변환하고, 모든 스트림에 공통 타임스탬프를 부여해 로깅합니다.
-
-변환된 명령은 시리얼로 플랫폼에 전송합니다. PX4 자세 추정값은 호스트 내장 PID 제어기의 피드백으로 사용되며, PID가 산출한 조종면 명령이 UDP로 X-Plane에 주입되어 루프를 완성합니다. 타이밍이나 인터페이스, 로깅을 이해하려면 이 블록이 핵심입니다.
+호스트는 통합 허브입니다. X-Plane 상태와 PX4 추정값을 동시에 수신하고, 플랫폼 명령 변환, 공통 타임스탬프 로깅, PID 제어 출력까지 모두 여기서 처리합니다.
 
 `>> NEXT SLIDE`
 
@@ -96,11 +92,7 @@ X-Plane에서 UDP로 기체 상태를, PX4에서 MAVLink/USB로 자세 추정값
 
 [구조도에서 3번 블록 강조]
 
-세 번째는 스튜어트 플랫폼입니다. 소프트웨어 명령을 실제 물리적 모션으로 바꾸는 블록입니다.
-
-호스트에서 받은 pose 명령을 플랫폼의 구동 범위 안에서 포화한 뒤 실제로 플랫폼을 움직입니다. 처리가 끝나면 ACK, 처리 시간, 범위 포화 여부와 스케일링 계수 α를 호스트에 반환합니다. 호스트-플랫폼 간 시리얼 명령-ACK 왕복 시간이 약 22 ms이고 서보 PWM 주기가 50 Hz(20 ms)이므로, 전체 루프는 약 50 Hz 근처에서 동작합니다.
-
-이 블록을 지나는 순간부터 PX4가 경험하는 것은 합성 신호가 아니라 실제 관성 운동입니다.
+스튜어트 플랫폼은 호스트의 pose 명령을 받아 실제 물리적 모션으로 변환합니다. 비용을 최소화하기 위해 50 Hz RC용 취미 서보를 사용했고, 시리얼 명령-ACK 왕복 시간은 약 22 ms입니다. 이 블록 이후부터 PX4가 경험하는 것은 실제 관성 운동입니다.
 
 `>> NEXT SLIDE`
 
@@ -108,11 +100,7 @@ X-Plane에서 UDP로 기체 상태를, PX4에서 MAVLink/USB로 자세 추정값
 
 [구조도에서 4번 블록 강조]
 
-마지막으로 PX4가 물리 루프를 완성합니다.
-
-플랫폼 위에 장착된 PX4의 온보드 IMU가 실제 운동을 감지하고, 자체 추정기로 자세를 실시간 산출합니다. 이 추정값이 MAVLink/USB를 통해 호스트로 전달되면, 호스트의 PID 제어기가 조종면 명령을 산출해 X-Plane에 주입하고 루프를 완성합니다.
-
-검증 대상은 소프트웨어 모사 추정기가 아니라, 실제 하드웨어에서 실제 운동에 반응하는 PX4 추정기 그 자체입니다.
+PX4의 IMU가 플랫폼의 실제 운동을 감지하고, 추정기가 자세를 산출합니다. 이 추정값이 호스트로 돌아와 PID 제어기를 거쳐 X-Plane에 주입되면 루프가 완성됩니다.
 
 `>> NEXT SLIDE`
 
@@ -124,25 +112,19 @@ X-Plane에서 UDP로 기체 상태를, PX4에서 MAVLink/USB로 자세 추정값
 
 기본 시나리오는 트림 전환입니다. 피치를 0도에서 +5도로 올렸다가, 유지한 뒤, 다시 돌아옵니다. 모든 실험은 동일한 X-Plane 초기 조건인 호놀룰루 PHNL 10해리 어프로치에서 시작합니다.
 
-각 실험 전에 스크립트로 설정한 유예 기간 동안 시스템을 안정화하고, 실험 내내 스튜어트 플랫폼의 포화 플래그를 감시하여 구동 가능 영역 안에 있는지 확인합니다. 조건별로 9회 반복하여 통계적 유의미성을 확보했습니다.
-
-각 실험에서 X-Plane 자세, PX4 자세, 플랫폼 자세 명령, 명령-ACK 타이밍, 후처리 메트릭을 기록합니다. 단순하고 반복 가능하며, 정량 분석에 바로 쓸 수 있기 때문에 이 시나리오를 선택했습니다.
-
-시스템 자체의 지연, 바이어스, 장착 효과를 먼저 분리해 파악해야 하므로, 제어된 조건의 깨끗한 기본 시나리오에서 시작합니다. 이 기준선이 있어야 이후 교란이나 포화 실험에서 시스템 오차와 시나리오 오차를 구분할 수 있습니다.
+각 실험은 포화 플래그를 감시하면서 9회 반복하여 통계적 유의미성을 확보했습니다. 시스템 자체의 지연, 바이어스, 장착 효과를 먼저 분리해야 하므로, 이처럼 제어된 조건의 깨끗한 기준선 시나리오에서 출발합니다.
 
 `>> NEXT SLIDE`
 
 ## 슬라이드 11 — 결과 1: 폐루프 추종 달성
 
-이제 결과를 보겠습니다. 먼저 추종 성능입니다.
+이제 결과를 보겠습니다.
 
 [그림 2: 피치 응답 오버레이]
 
-보시면 PX4 피치가 명령 전환을 잘 따라가고 있습니다. 트림 전환은 저주파 기동이라 위상 지연이 그래프에서 두드러지지 않으며, 지연에 대한 정량 분석은 슬라이드 13에서 다루겠습니다. 주목할 점은 보정 전 오차에 거의 일정한 오프셋이 포함되어 있다는 것입니다.
+주황색 선이 PX4 피치, 파란 점선이 X-Plane 명령 피치입니다. 보시면 PX4가 트림 전환을 따라가고 있습니다. 그런데 두 선 사이에 약 +1.8도의 일정한 간격이 있죠 — 이것이 장착 바이어스입니다. 이 바이어스만큼 보정한 것이 파란 실선인데, 보정 후에는 추종이 훨씬 가까워집니다.
 
-이 오프셋은 무작위적 불안정이 아닙니다. 약 +1.8도로 실험 간에 일관되게 나타나며, 장착 바이어스로 판단됩니다. 그래서 보정 전 오차와 바이어스 보정 후 오차를 둘 다 평가했습니다.
-
-결론적으로, 폐루프 추종이 작동하고, 수치로 평가할 수 있으며, 오차 구조가 물리적으로 설명이 됩니다.
+핵심은, 폐루프 추종이 작동하고, 지배적 오차가 물리적으로 설명된다는 점입니다.
 
 `>> NEXT SLIDE`
 
@@ -162,15 +144,17 @@ X-Plane에서 UDP로 기체 상태를, PX4에서 MAVLink/USB로 자세 추정값
 
 ## 슬라이드 13 — 결과 3: 지연 특성화 및 시스템 성능
 
-추종 정확도는 봤는데, 그러면 이 시스템이 얼마나 빠르게 반응할 수 있을까요? 실질적으로 충실도를 제한하는 건 바로 이 부분입니다.
+추종이 되는 것은 확인했는데, 그러면 이 시스템이 얼마나 빠르게 반응할 수 있을까요? 이 슬라이드가 그 질문에 답합니다.
 
 [그림 5(a): 지연 시계열 + 그림 5(b): 지연 분포]
 
-타이밍 지표는 네 가지로 나뉩니다. 첫째, X-Plane 샘플 에이지는 호스트가 시뮬레이터 데이터를 사용하는 시점에서 그 데이터가 얼마나 오래된 것인지로 평균 약 29 ms입니다. 둘째, PX4 샘플 에이지는 PX4 자세 추정값이 호스트에 도달했을 때의 경과 시간으로 평균 약 19 ms입니다. 셋째, 시리얼 RTT는 호스트가 스튜어트 플랫폼에 명령을 보내고 ACK를 받기까지의 왕복 시간으로 평균 약 22 ms입니다. 넷째, 종단간 지연은 X-Plane 데이터가 호스트에 도착한 시점부터 플랫폼이 동작을 완료하고 ACK가 돌아오기까지의 전체 시간으로 평균 약 51 ms입니다.
+지연을 네 구간으로 분해했습니다. X-Plane 샘플 에이지는 시뮬레이터 데이터가 호스트에서 사용될 때까지의 경과 시간, PX4 샘플 에이지는 PX4 자세 추정값이 호스트에 도달할 때까지의 경과 시간, 시리얼 RTT는 호스트에서 플랫폼으로 명령을 보내고 ACK를 받기까지의 왕복 시간, 종단간 지연은 X-Plane 데이터 수신부터 플랫폼 구동 완료까지의 총 시간입니다.
 
-이게 중요한 이유는, 이 지연 사슬이 동적 추종 한계를 정하고 유효 bandwidth를 PWM 주기나 호스트 tick만으로 추정할 수 없다는 점을 보여주기 때문입니다.
+왼쪽 시계열에서 각각 파란색, 주황색, 초록색, 빨간색으로 표시했고, 실선이 구간 평균, 음영이 최소-최대 범위입니다. 빨간 종단간 선이 약 40에서 60 ms 대에서 움직입니다.
 
-정리하면, 호스트-플랫폼 갱신 루프는 약 50 Hz로 동작하고 대표 baseline run에서 종단간 지연은 평균 약 51 ms였습니다. 다만 타이밍 분포 폭이 충분히 작다고 보기는 어려우므로, 현재 데이터만으로 유효 bandwidth를 직접 주장하지는 않고 전용 sine-sweep 측정으로 정량화할 예정입니다. 또한 z=+20 mm 중립 위치에서의 가용 회전 범위 안에서 baseline 명령은 대부분 정상 영역에 머물렀고, baseline run들의 포화 비율도 0-1% 수준이었습니다. 그리고 앞 슬라이드에서 봤듯이 잔류 바이어스는 대체로 안정적이며 후처리로 보정 가능합니다.
+오른쪽 박스 플롯은 baseline 5회 전체의 분포입니다. 종단간 중앙값이 약 48 ms이고, X-Plane 에이지 약 27 ms, PX4 에이지 약 19 ms, 시리얼 RTT 약 22 ms가 겹쳐 누적됩니다.
+
+이 지연 사슬이 동적 충실도의 실질적 한계를 정합니다. 분포에서 보시듯 지터 폭이 상당하기 때문에, 현재 데이터만으로 유효 bandwidth를 확정하기는 어렵습니다. 이 부분은 향후 sine-sweep 측정으로 정량화할 계획입니다.
 
 `>> NEXT SLIDE`
 
@@ -184,6 +168,8 @@ X-Plane에서 UDP로 기체 상태를, PX4에서 MAVLink/USB로 자세 추정값
 
 셋째, 시스템 특성화를 통해 향후 확장의 기반을 확보했습니다. 지연, 바이어스, 작업 영역의 정량적 한계를 확인함으로써, 교란 실험이나 다른 기체 유형으로의 확장을 위한 기준선을 마련했습니다.
 
+다만 이 시스템이 기존 소프트웨어 HILS나 실제 비행 시험을 대체하는 것은 아닙니다. 플랫폼의 작업 영역은 유한하고, 공기역학적 하중은 재현하지 못하며, 유효 bandwidth도 아직 측정이 필요합니다. 이 시스템의 위치는 소프트웨어 HILS와 비행 시험 사이의 보완적 검증 수단입니다.
+
 향후 계획으로는, 단기적으로 시간 정렬 오차 분석, sine-sweep 기반 bandwidth 측정, 반복성 특성화, 포화 경계 부근 스트레스 시험을 예정하고 있습니다. 장기적으로는 멀티로터 등 다른 기체로 확장하여 아키텍처의 범용성을 실증하는 것이 목표입니다.
 
 `>> NEXT SLIDE`
@@ -194,19 +180,58 @@ X-Plane에서 UDP로 기체 상태를, PX4에서 MAVLink/USB로 자세 추정값
 
 `>> BACKUP SLIDE (if needed)`
 
-## 슬라이드 16 — Q&A 백업
+## Q&A 답변
 
-특정 질문이 나올 때만 이 슬라이드를 사용합니다. 그 외에는 슬라이드 15에 머물러 주세요.
+각 답변에 프레젠테이션 이동 지시가 포함되어 있습니다.
+
+**"왜 z=+20 mm를 중립 위치로?"**
+[프레젠테이션: 슬라이드 16으로 이동 — 증명 그림 있음]
+회전 가용 범위는 z 높이에 따라 달라집니다. z=+20 mm에서는 그 중립 위치에서의 가용 범위가 거의 최대가 되며, firmware의 최악 방향 회전 한계가 약 20° 수준입니다. 반면 z=0 mm 부근에서는 약 10° 수준으로 줄어듭니다. 그래서 자세 구현 범위를 최대화하기 위해 z=+20 mm를 선택했습니다.
+
+**"왜 기존 HILS가 아니라 이걸?"**
+[프레젠테이션: 슬라이드 3으로 이동 — 핵심 차별점 슬라이드]
+센서 신호 합성만으로는 줄 수 없는 실제 관성 운동을 제공하면서도, 작업 영역과 공기역학적 재현의 한계는 솔직하게 인정하고 있습니다.
+
+**"포화는 어떻게 처리?"**
+[프레젠테이션: 슬라이드 10으로 이동 — 실험 설정 슬라이드]
+baseline 명령이 z=+20 mm에서의 가용 회전 범위 안에 들어오는지 확인하고, Stewart saturation flag를 계속 모니터링합니다. 갱신된 baseline 지표에서는 run에 따라 포화 비율이 0-1% 수준으로 나타나므로, baseline은 대체로 정상 영역 거동을 보여준다고 해석할 수 있습니다. 포화 경계에 근접하는 스트레스 시험은 향후 별도로 수행할 예정입니다.
+
+**"Yaw는?"**
+[프레젠테이션: 슬라이드 15 유지 — 구두 답변]
+Yaw도 루프에 포함되어 있지만, 트림 전환 시나리오에서는 주로 피치가 여기됩니다. Yaw 추종과 바이어스 정렬은 코드에 구현되어 있으나, 이번 발표에서는 다루지 않습니다.
+
+**"유효 bandwidth는?"**
+[프레젠테이션: 슬라이드 13으로 이동 — 지연 데이터 보여주며 답변]
+현재 근거로 제시할 수 있는 것은 종단간 지연 약 48 ms뿐입니다. 유효 attitude bandwidth는 전용 sine-sweep 측정으로 제시할 예정입니다. 그 전까지는 이 시스템이 트림 전환 같은 저주파 기동에 적합하다고만 설명하는 것이 타당합니다.
+
+**"플랫폼이 개루프인데 포즈 정확도는?"**
+[프레젠테이션: 슬라이드 15 유지 — 구두 답변]
+설계 목표 중 하나가 스튜어트 플랫폼을 최대한 저비용으로 구현하는 것이었습니다. 이 때문에 인코더 피드백이 없는 저가 RC용 취미 서보를 선택하게 되었고, 결과적으로 개루프 구동 방식이 된 것입니다. 그럼에도 디지털 경사계로 플랫폼의 정적 자세 정확도를 측정한 결과 롤 약 0.1°, 피치 약 0.5°였습니다. 연속 피드백 없이도 플랫폼 수준 오차의 실질적 상한을 확인한 셈입니다. PX4 IMU가 루프 안에서 유일한 폐루프 물리 측정 수단이며, 최종 출력인 자세는 측정하지만 중간 단계인 플랫폼 포즈는 측정하지 못합니다. 인코더 추가는 향후 개선 방안으로 고려하고 있습니다.
+
+**"장착 바이어스가 물리적으로 뭔가? 제거 가능?"**
+[프레젠테이션: 슬라이드 12로 이동 — Fig 3/4 보여주며 답변]
+약 1.8°의 바이어스는 플랫폼 상판 위에 FC를 장착할 때의 물리적 정렬 오차에서 비롯됩니다. 실험 내에서는 일관되게 나타나고(표준편차 약 0.2°), 후처리로 보정할 수 있으며 실제로 보정하고 있습니다. 마운트를 물리적으로 조정할 수도 있지만, HILS 검증 목적으로는 바이어스가 안정적인 한 소프트웨어 보정으로 충분합니다.
+
+**"실험 간 반복성은?"**
+[프레젠테이션: 슬라이드 12로 이동 — Fig 4 보여주며 답변]
+기본 실험을 5회(#5~#9) 수행했습니다. 실험 내 바이어스의 표준편차는 약 0.2°이고, 실험 간에는 최대 0.8°까지 차이가 나는데, 이는 열적 드리프트와 미세한 재장착 차이 때문으로 보입니다. 체계적인 반복성 분석은 향후 과제입니다.
+
+**"쿼드로터 등 다른 기체로 확장 가능?"**
+[프레젠테이션: 슬라이드 14로 이동 — 향후 계획 보여주며 답변]
+원리적으로는 가능합니다. 시스템 구조가 고정익에만 묶여 있지는 않습니다. 다만 이번 발표에서는 고정익을 첫 번째 실증 사례로 다루고 있으며, 다른 기체로의 확장 검증은 실제로 수행한 뒤에 주장하는 것이 맞습니다. 따라서 현재로서는 향후 과제로 보는 것이 적절합니다.
+
+**"FC 장착 모습을 보여줄 수 있나?"**
+[프레젠테이션: 슬라이드 12로 이동 — 바이어스 데이터로 리다이렉트]
+장착 조건 비교 자체가 과학적 근거입니다. 장착 품질을 바꾸면 바이어스 거동이 예측 가능하게 변합니다. 그림 3, 4가 이를 보여줍니다: 느슨한 장착에서는 점진적 드리프트, 단단한 장착에서는 안정된 정적 오프셋만 남습니다. 물리적 장착은 시스템의 저비용 설계 철학에 맞춰 의도적으로 단순하게 유지했습니다. 정량적 바이어스 데이터가 장착 사진보다 더 유의미한 정보를 제공합니다.
 
 ---
 
 ## 발표 운용 참고사항
 
-- 시간 부족 시 슬라이드 6~9(블록 상세)를 빠르게 넘기고, 슬라이드 5 개요에서 핵심만 전달.
-- 기술적 심화는 슬라이드 7(호스트), 11(추종), 13(지연)에 집중.
-- 슬라이드 4 (데모 영상)는 청중 몰입용 — 15~20초 이내.
+- 슬라이드 6~9(블록 상세)는 슬라이드당 15~20초로 빠르게 넘김. 시각 자료가 세부를 전달하고, 구두 설명은 핵심 역할만 짚음.
+- 기술적 심화는 슬라이드 11(추종), 12(바이어스), 13(지연)에 집중.
+- 슬라이드 4 (데모 영상)에서 트림 전환 시나리오를 구두로 연결 — 15~20초 이내, "이 동작의 데이터를 결과에서 보겠습니다"로 전환.
 
----
 ---
 
 # English Reference Script
@@ -218,13 +243,13 @@ It also contains Q&A prepared answers for anticipated questions.
 
 ## Slide 1 — Title / One-line contribution
 
-Hello, I'm Hyeon-yong Jeong. Today I'll be talking about our physically closed-loop HILS testbed built around a Stewart platform, with a focus on validating the PX4 estimator under real inertial motion.
+Hello, I'm Hyeon-yong Jeong from Kookmin University.
 
-In short — we connected X-Plane, a real Stewart platform, and a real PX4 flight controller into one loop. The simulator drives physical motion, the PX4 senses it, and that measurement feeds right back into the simulation.
+In most HILS setups, the flight controller's IMU never actually moves. We changed that. We connected X-Plane, a real Stewart platform, and a real PX4 flight controller into one loop — where simulated attitude becomes real physical motion, PX4 senses it, and that measurement feeds back into the simulation.
 
-The core question is whether the PX4's onboard estimator responds differently when driven by real physical motion versus synthesized IMU data — and this platform is built to answer that.
+The core question is simple: how does the PX4 estimator respond when driven by real inertial motion?
 
-I'll walk you through the motivation, how we built it, what we tested, what we measured, and where we go next.
+Today I'll show you the system architecture, baseline experimental results, and the quantified capabilities and limits of this approach.
 
 ## Slide 2 — Why add physical motion to HILS?
 
@@ -232,9 +257,9 @@ So why add physical motion to HILS?
 
 Conventional HILS is powerful. But in most setups, the flight controller gets synthesized sensor data. You check attitude on a screen or in a log file. The IMU never actually moves.
 
-What we wanted was physical realism — to make the FC's IMU experience real inertial motion, not just numbers fed through a wire.
+What we wanted was physical realism — to make the FC's IMU experience real inertial motion and to see the hardware physically responding, not just numbers on a screen.
 
-This approach is not limited to fixed-wing aircraft — any vehicle where attitude dynamics matter could use the same principle. We chose fixed-wing as the first demonstration case.
+This approach is not limited to fixed-wing aircraft — any vehicle where attitude dynamics matter could use the same principle. We chose fixed-wing as the first demonstration case because X-Plane supports fixed-wing and helicopters, and among those, a fixed-wing trim transition is the simplest repeatable baseline for isolating system characteristics.
 
 In this talk, we show with experimental data that this physically closed-loop testbed works stably and that tracking performance is quantifiable.
 
@@ -242,17 +267,19 @@ In this talk, we show with experimental data that this physically closed-loop te
 
 So what's actually new here?
 
-The key point is that the PX4's estimator reacts to real physical motion, not synthesized signals. In conventional HILS, IMU data is software-generated. In this system, the estimator experiences real inertial excitation. That changes what you can validate.
+The key point is that the PX4's estimator reacts to real physical motion, not synthesized signals. In conventional HILS, IMU data is software-generated. In this system, the estimator experiences real inertial excitation.
 
-Now, to be upfront: this doesn't replace conventional HILS or real flight tests. The platform has a finite workspace, actuation limits, and it can't reproduce aerodynamic loads. So think of it as a complementary layer — one that gives you physical evidence that a pure software loop can't.
+The Stewart platform serves as the physical link between the simulator and the flight controller — converting software attitude commands into real 6-DOF motion so the PX4 IMU actually moves.
 
-The Stewart platform serves as the physical link between the simulator and the flight controller — converting software attitude commands into real 6-DOF motion so the PX4 IMU actually moves. I'll show you the detailed architecture next.
+I'll show you what this physical stimulus reveals, with real data. But first, let's see the system in action.
 
 ## Slide 4 — System in action
 
-[Show hardware photo and/or demo video]
+[Play demo video]
 
-Here's the system in action. You can see the Stewart platform moving to match the simulated aircraft attitude, with the PX4 sitting on top, sensing everything in real time.
+What you're seeing is our baseline experiment — a trim transition scenario. X-Plane commands a pitch change from 0 to +5 degrees, the Stewart platform tilts accordingly, and the PX4 mounted on top senses this motion in real time.
+
+We'll see the tracking data from exactly this type of run in the results. But first, let me walk through the system architecture.
 
 ## Slide 5 — How the physical closed loop works
 
@@ -273,39 +300,25 @@ Software, mechanics, physical sensing, and control I/O — all connected in one 
 
 [Architecture figure with Block 1 highlighted]
 
-The loop starts here. X-Plane computes the aircraft dynamics and provides a repeatable scenario environment. Vehicle state is published to the host over UDP.
-
-In a conventional setup, the loop would close entirely inside X-Plane. In this architecture, PX4 attitude comes back through real hardware, and the host PID converts it into control-surface commands that are injected into X-Plane.
+X-Plane computes the dynamics and publishes vehicle state over UDP. In a conventional setup the loop closes inside the simulator, but here PX4 attitude returns through the physical path.
 
 ## Slide 7 — Block 2: Python host / bridge
 
 [Architecture figure with Block 2 highlighted]
 
-The host is the integration hub of the entire system.
-
-It simultaneously receives X-Plane state over UDP and PX4 attitude estimates over MAVLink/USB. It converts the simulator state into platform pose commands, and timestamps every stream with a common clock for logging and latency analysis.
-
-Outbound, it sends pose commands to the platform over serial. PX4 attitude is used as feedback by the host PID, and the PID output is injected into X-Plane over UDP to close the loop. If you want to understand timing, interfaces, or logging, this is the block.
+The host is the integration hub. It receives X-Plane state and PX4 attitude simultaneously, converts simulator state to platform commands, applies common timestamps for logging, and runs the PID controller that closes the loop back to X-Plane.
 
 ## Slide 8 — Block 3: Stewart platform actuation
 
 [Architecture figure with Block 3 highlighted]
 
-The third block is the Stewart platform — the hardware that turns software commands into real motion.
-
-It takes the pose command from the host, applies workspace and saturation limits, and physically moves. Once done, it returns an ACK, processing time, saturation flag, and scaling factor alpha back to the host. With serial command-ACK around 22 ms and the RC servo PWM frame at 20 ms (50 Hz), the overall loop runs around 50 Hz.
-
-After this point, what PX4 experiences is no longer synthetic — it's actual inertial motion.
+Takes the host's pose command and converts it to real physical motion. We used 50 Hz hobby-grade RC servos to minimize cost; serial command-ACK round trip is about 22 ms. After this block, what PX4 experiences is actual inertial motion.
 
 ## Slide 9 — Block 4: PX4 sensing and return
 
 [Architecture figure with Block 4 highlighted]
 
-Finally, PX4 closes the physical side of the loop.
-
-Its onboard IMU senses the actual platform motion, and its estimator computes attitude in real time on real hardware. That estimate is sent back to the host over MAVLink/USB, where the host PID computes control-surface commands and injects them into X-Plane — completing the loop.
-
-The validation target is not a software-emulated estimator. It's the actual PX4 estimator reacting to real motion.
+PX4's onboard IMU senses the platform's real motion and its estimator computes attitude. That estimate returns to the host, where the PID controller generates control-surface commands for X-Plane, completing the loop.
 
 ## Slide 10 — What we tested and how we measured it
 
@@ -315,23 +328,17 @@ We set the platform's neutral position at z = +20 mm — that maximizes the avai
 
 The baseline scenario is a simple trim transition: pitch goes from 0 to +5 degrees, holds there, then comes back. Every run launches from the same X-Plane starting condition — a Honolulu PHNL 10-nautical-mile approach.
 
-Before each run, there's a scripted grace period for the system to stabilize, and we monitor the Stewart platform's saturation flag throughout to make sure we stay within the feasible workspace. We ran 9 repetitions per condition for statistical confidence.
-
-For each run we record X-Plane attitude, PX4 attitude, platform pose commands, command-ACK timing, and a set of post-processed metrics. We picked this scenario because it's simple, repeatable, and gives us clean numbers to work with.
-
-Because we need to isolate system-inherent latency, bias, and mounting effects first, we start with a clean baseline under controlled conditions. Without that baseline, you can't separate system-level error from scenario-level error in later disturbance or saturation tests.
+Each run monitors the saturation flag throughout, and we ran 9 repetitions per condition for statistical confidence. We need to isolate system-inherent latency, bias, and mounting effects first, so we start with a clean baseline under controlled conditions.
 
 ## Slide 11 — Result 1: Closed-loop tracking is achieved
 
-Now let's look at the results. Starting with tracking.
+Now let's look at the results.
 
 [Show Fig. 2: pitch response overlay]
 
-You can see PX4 pitch follows the commanded transition well. Since this trim transition is low-frequency, phase lag is not visually pronounced in this plot; we'll quantify latency on Slide 13. What's interesting here is the near-constant offset in the raw error.
+The orange line is PX4 pitch, the blue dashed line is X-Plane commanded pitch. You can see PX4 tracks the trim transition. But notice the constant gap of about +1.8 degrees between the two — that is the mounting bias. The solid blue line is X-Plane pitch shifted by that bias; once corrected, the tracking becomes much tighter.
 
-But that offset isn't random instability. It's about +1.8 degrees, consistent across runs — a mounting bias. So we evaluated both the raw error and a bias-corrected version.
-
-The bottom line: closed-loop tracking works, it's quantifiable, and the error structure makes physical sense.
+The key point: closed-loop tracking works, and the dominant error is physically explainable.
 
 ## Slide 12 — Result 2: Mounting quality explains the dominant error
 
@@ -347,15 +354,17 @@ Taken together, the dominant pitch error comes from mounting quality, not the co
 
 ## Slide 13 — Result 3: Latency characterization and system performance
 
-Now, tracking accuracy is one thing — but how fast can this system actually respond? That's what limits fidelity in practice.
+We showed tracking works — but how fast can this system actually respond? This slide answers that.
 
 [Show Fig. 5(a): latency time series + Fig. 5(b): latency distribution]
 
-There are four timing categories. First, X-Plane sample age: how old simulator data is when the host uses it, about 29 ms on average. Second, PX4 sample age: how old PX4 attitude data is when it reaches the host, about 19 ms. Third, serial RTT: host command to Stewart and ACK back, about 22 ms. Fourth, end-to-end delay: from X-Plane data arrival at the host to completed platform actuation ACK, about 51 ms.
+We decomposed latency into four segments. X-Plane sample age is how stale the simulator data is when the host uses it. PX4 sample age is how stale PX4's attitude estimate is when the host reads it. Serial RTT is the command-to-ACK round trip between the host and the Stewart platform. And end-to-end latency is the total time from X-Plane data arrival to completed platform actuation.
 
-This matters because this latency chain sets a practical limit on dynamic fidelity and shows why effective bandwidth should be measured explicitly, not inferred from the PWM frame or host tick.
+On the left time series, these are shown as blue, orange, green, and red respectively. Solid lines are binned means, shading is the min-max range. The red end-to-end line hovers around 40 to 60 ms.
 
-To summarize: the host-platform update loop runs at about 50 Hz, and the representative end-to-end latency is about 51 ms. The timing spread is not negligible, so I am not claiming a measured bandwidth from these data alone; a dedicated sine-sweep test will be used to quantify effective bandwidth. At the selected neutral position, baseline commands stayed mostly within the available rotation range at z = +20 mm, and observed saturation across baseline runs remained in the 0-1% range. As we saw on the previous slide, the residual bias is largely stable and can be corrected in post-processing.
+On the right, the box plot shows the distribution across all five baseline runs. End-to-end median is about 48 ms, with X-Plane age around 27 ms, PX4 age around 19 ms, and serial RTT around 22 ms overlapping in the pipeline.
+
+This latency chain sets the practical limit on dynamic fidelity. The jitter spread is significant enough that we cannot pin down an effective bandwidth from these data alone. That will come from a dedicated sine-sweep measurement.
 
 ## Slide 14 — Takeaways
 
@@ -367,69 +376,70 @@ Second, fidelity. Bias-corrected pitch tracking RMSE is about 0.46 degrees, with
 
 Third, by characterizing the system — its latency, bias, and workspace limits — we established a quantitative baseline for future expansion to disturbance testing and other vehicle types.
 
+That said, this system does not replace conventional software HILS or real flight testing. The platform has a finite workspace, it cannot reproduce aerodynamic loads, and effective bandwidth still needs dedicated measurement. We see this as a complementary validation layer between software HILS and flight test.
+
 For next steps: in the near term, time-aligned error analysis, sine-sweep-based bandwidth measurement, repeatability characterization, and stress tests near the saturation boundary. Longer term, we want to extend to other vehicle types — multirotor, spacecraft — to demonstrate the architecture's generality.
 
 ## Slide 15 — End
 
 Thank you. I'm happy to take any questions.
 
-## Slide 16 — Q&A backup
+## Slide 16 — Backup: z=+20 mm proof figure
 
-Use this slide only if a specific question comes up. Otherwise stay on Slide 15.
+Navigate here only if the z=+20 mm question comes up. Otherwise stay on Slide 15 and navigate to main-body slides as indicated in the Q&A prepared answers below.
 
 ---
 
 ## Optional live delivery cues
 
-- If time is short, skim Slides 6–9 (block details) quickly and let Slide 5 overview carry the load.
-- Spend most technical depth on Slide 7 (host), 11 (tracking), and 13 (latency).
-- Slide 4 (demo footage) is for audience engagement — keep it brief, 15–20 seconds.
+- Slides 6–9 (block details) are condensed to ~15–20 seconds each. Visuals carry the detail; spoken script gives only the key role per block.
+- Spend most technical depth on Slides 11 (tracking), 12 (bias), and 13 (latency).
+- Slide 4 (demo video): narrate the trim-transition scenario as it plays — 15–20 seconds, then bridge to "we'll see this data in the results."
 
 ---
 
-## Q&A prepared answers
 
-**"Why z=+20 mm as the neutral position?"** → Slide 16, left panel with proof figure.
+
+## Q&A prepared answers (English)
+
+Each answer includes a presentation navigation cue in brackets.
+
+**"Why z=+20 mm as the neutral position?"**
+[Navigate to slide 16 — proof figure available]
 The available rotation range depends on z height. At z=+20 mm, the available range in that neutral position is near its maximum; the firmware's worst-direction rotation limit is about 20° there, versus about 10° around z=0 mm. This maximizes the usable attitude envelope.
 
-> 회전 가용 범위는 z 높이에 따라 달라집니다. z=+20 mm에서는 그 중립 위치에서의 가용 범위가 거의 최대가 되며, firmware의 최악 방향 회전 한계가 약 20° 수준입니다. 반면 z=0 mm 부근에서는 약 10° 수준으로 줄어듭니다. 그래서 자세 구현 범위를 최대화하기 위해 z=+20 mm를 선택했습니다.
-
-**"Why not just conventional HILS?"** → Slide 3.
+**"Why not just conventional HILS?"**
+[Navigate to slide 3 — key differentiator slide]
 We add real inertial excitation that sensor synthesis cannot provide, while honestly acknowledging workspace and aerodynamic reproduction limits.
 
-> 센서 신호 합성만으로는 줄 수 없는 실제 관성 운동을 제공하면서도, 작업 영역과 공기역학적 재현의 한계는 솔직하게 인정하고 있습니다.
-
-**"How do you handle saturation?"** → Slides 8 + 10 + 14.
+**"How do you handle saturation?"**
+[Navigate to slide 10 — experiment setup slide]
 We compare the baseline commands against the available rotation range at z=+20 mm and monitor the Stewart saturation flag throughout. In the refreshed baseline metrics, observed saturation is 0-1% depending on the run, so the baseline mostly represents nominal-region behavior. Dedicated stress tests near the saturation boundary are still planned.
 
-> baseline 명령이 z=+20 mm에서의 가용 회전 범위 안에 들어오는지 확인하고, Stewart saturation flag를 계속 모니터링합니다. 갱신된 baseline 지표에서는 run에 따라 포화 비율이 0-1% 수준으로 나타나므로, baseline은 대체로 정상 영역 거동을 보여준다고 해석할 수 있습니다. 포화 경계에 근접하는 스트레스 시험은 향후 별도로 수행할 예정입니다.
-
-**"What about yaw?"** → Slide 10.
+**"What about yaw?"**
+[Stay on slide 15 — verbal answer]
 Yaw is in the loop, but the trim-transition scenario primarily excites pitch. Yaw tracking and bias alignment are handled in the code but not the focus of this presentation.
 
-> Yaw도 루프에 포함되어 있지만, 트림 전환 시나리오에서는 주로 피치가 여기됩니다. Yaw 추종과 바이어스 정렬은 코드에 구현되어 있으나, 이번 발표에서는 다루지 않습니다.
+**"What's the effective bandwidth of this system?"**
+[Navigate to slide 13 — show latency data while answering]
+Today I can support only the measured end-to-end latency of about 48 ms. The effective attitude bandwidth will be reported from a dedicated sine-sweep measurement. Until that test is complete, I describe the system only as suited to low-frequency maneuvers such as trim transitions.
 
-**"What's the effective bandwidth of this system?"** → Slides 7 + 13.
-Today I can support only the 50 Hz host tick and the measured end-to-end latency of about 51 ms. The effective attitude bandwidth will be reported from a dedicated sine-sweep measurement; placeholder wording for the final version is: "effective attitude bandwidth ~X.X Hz, with phase lag ~Y° at 1 Hz." Until that test is complete, I describe the system only as suited to low-frequency maneuvers such as trim transitions.
-
-> 현재 제가 직접 근거로 제시할 수 있는 것은 호스트 tick 약 50 Hz와 종단간 지연 약 51 ms뿐입니다. 유효 attitude bandwidth는 전용 sine-sweep 측정으로 제시할 예정이며, 최종 문구의 placeholder는 예를 들어 "effective attitude bandwidth ~X.X Hz, with phase lag ~Y° at 1 Hz" 같은 형태가 될 것입니다. 그 전까지는 이 시스템이 트림 전환 같은 저주파 기동에 적합하다고만 설명하는 것이 타당합니다.
-
-**"The platform is open-loop — how do you trust pose accuracy?"** → Slide 3.
+**"The platform is open-loop — how do you trust pose accuracy?"**
+[Stay on slide 15 — verbal answer]
 A design goal was to keep the Stewart platform as affordable as possible, which led to using inexpensive RC aircraft-grade hobby servos without encoder feedback — hence the open-loop actuation. Despite this, we measured the platform's static pose accuracy with a digital inclinometer: approximately 0.1° in roll and 0.5° in pitch. So we have a practical bound on platform-level error even without continuous feedback. The PX4 IMU remains the only closed-loop physical measurement; we measure the output (attitude) but not the intermediate stage (platform pose). Adding encoders is a possible future improvement.
 
-> 설계 목표 중 하나가 스튜어트 플랫폼을 최대한 저비용으로 구현하는 것이었습니다. 이 때문에 인코더 피드백이 없는 저가 RC용 취미 서보를 선택하게 되었고, 결과적으로 개루프 구동 방식이 된 것입니다. 그럼에도 디지털 경사계로 플랫폼의 정적 자세 정확도를 측정한 결과 롤 약 2.1°, 피치 약 1.5°였습니다. 연속 피드백 없이도 플랫폼 수준 오차의 실질적 상한을 확인한 셈입니다. PX4 IMU가 루프 안에서 유일한 폐루프 물리 측정 수단이며, 최종 출력인 자세는 측정하지만 중간 단계인 플랫폼 포즈는 측정하지 못합니다. 인코더 추가는 향후 개선 방안으로 고려하고 있습니다.
-
-**"What is the mounting bias physically? Can you eliminate it?"** → Slide 12.
+**"What is the mounting bias physically? Can you eliminate it?"**
+[Navigate to slide 12 — show Fig 3/4 while answering]
 The ~1.8° bias comes from the physical alignment of the FC on the platform top plate. It is consistent within a run (std ~0.2°) and can be calibrated out in post-processing, which we do. The physical mount could also be shimmed or re-aligned, but for HILS validation purposes, software correction is sufficient as long as the bias is stable.
 
-> 약 1.8°의 바이어스는 플랫폼 상판 위에 FC를 장착할 때의 물리적 정렬 오차에서 비롯됩니다. 실험 내에서는 일관되게 나타나고(표준편차 약 0.2°), 후처리로 보정할 수 있으며 실제로 보정하고 있습니다. 마운트를 물리적으로 조정할 수도 있지만, HILS 검증 목적으로는 바이어스가 안정적인 한 소프트웨어 보정으로 충분합니다.
-
-**"How repeatable are the results across runs?"** → Slides 12 + 14.
+**"How repeatable are the results across runs?"**
+[Navigate to slide 12 — show Fig 4 while answering]
 We have 5 baseline runs (#5–#9). Within each run, bias std is ~0.2°. Across runs, the bias estimate varies by up to 0.8°, likely due to thermal drift and minor re-seating between runs. Full repeatability characterization is listed as a next step.
 
-> 기본 실험을 5회(#5~#9) 수행했습니다. 실험 내 바이어스의 표준편차는 약 0.2°이고, 실험 간에는 최대 0.8°까지 차이가 나는데, 이는 열적 드리프트와 미세한 재장착 차이 때문으로 보입니다. 체계적인 반복성 분석은 향후 과제입니다.
-
-**"Can this extend to quadrotors or other vehicles?"** → Slide 14.
+**"Can this extend to quadrotors or other vehicles?"**
+[Navigate to slide 14 — show future plans while answering]
 In principle, yes — the architecture is not tied to fixed-wing only. But this talk demonstrates fixed-wing as the first case, and cross-vehicle validation should be treated as future work until we actually run those vehicles on the platform.
 
-> 원리적으로는 가능합니다. 시스템 구조가 고정익에만 묶여 있지는 않습니다. 다만 이번 발표에서는 고정익을 첫 번째 실증 사례로 다루고 있으며, 다른 기체로의 확장 검증은 실제로 수행한 뒤에 주장하는 것이 맞습니다. 따라서 현재로서는 향후 과제로 보는 것이 적절합니다.
+**"Can you show how the FC is mounted on the platform?"**
+[Navigate to slide 12 — redirect to bias data]
+The mounting comparison itself is the scientific evidence — when we change mounting condition, bias behavior changes predictably. Figures 3 and 4 show this: loose mount gives progressive drift, firm mount gives a stable static offset. The physical mount is intentionally simple and low-cost, consistent with the system's overall design philosophy. The quantitative bias data is more informative than a photograph of the mount.

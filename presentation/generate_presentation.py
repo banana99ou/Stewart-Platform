@@ -425,9 +425,8 @@ p.font.bold = True
 p.alignment = PP_ALIGN.CENTER
 p.line_spacing = Pt(68)
 
-_p(tf, "Estimator-in-the-Loop Validation Using a Stewart Platform, X-Plane, and PX4", 22, GREY, sp=Pt(24), align=PP_ALIGN.CENTER)
-_ko(tf, "스튜어트 플랫폼 · X-Plane · PX4 기반 추정기-폐루프 자세 검증",
-    20, Pt(6), PP_ALIGN.CENTER)
+_p(tf, "물리적 폐루프 HILS를 이용한 비행 자세제어 검증", 32, DARK, sp=Pt(18), align=PP_ALIGN.CENTER)
+_p(tf, "Estimator-in-the-Loop Validation Using a Stewart Platform, X-Plane, and PX4", 22, GREY, sp=Pt(12), align=PP_ALIGN.CENTER)
 
 tb = _tb(sl, Inches(2), Inches(7.0), Inches(16), Inches(1.0))
 tf = tb.text_frame
@@ -488,7 +487,6 @@ for en, kr in [
     ("PX4 IMU senses real inertial excitation", "PX4 IMU 실제 관성 자극 감지"),
     ("Measured attitude fed back into loop", "측정 자세 → 제어 루프 피드백"),
     ("Timing and fidelity measured", "타이밍·충실도 정량 측정"),
-    ("Fixed-wing first; concept extensible to other vehicles", "고정익 우선 실증; 원리적으로 다른 기체에도 확장 가능"),
 ]:
     _bullet(rtf, en, kr, 20, Pt(14))
 
@@ -610,7 +608,7 @@ try:
 
     ptb = _tb(sl, photo_card_left, photo_card_top - Inches(0.45), photo_card_w, Inches(0.35))
     p = ptb.text_frame.paragraphs[0]
-    p.text = "1. Hardware Setup"
+    p.text = "Hardware Setup"
     p.font.size = Pt(18)
     p.font.color.rgb = BLUE
     p.font.bold = True
@@ -618,7 +616,7 @@ try:
 
     vtb = _tb(sl, video_left, video_top - Inches(0.45), video_w, Inches(0.35))
     p = vtb.text_frame.paragraphs[0]
-    p.text = "2. End-to-End Demo Video"
+    p.text = "Baseline Trim-Transition Demo"
     p.font.size = Pt(20)
     p.font.color.rgb = BLUE
     p.font.bold = True
@@ -655,8 +653,8 @@ _callout(
     Inches(8.95),
     Inches(16.0),
     Inches(1.0),
-    "Start with the PX4-on-platform hardware setup, then show the integrated "
-    "closed-loop demo video.",
+    "Baseline scenario: X-Plane pitch 0\u00b0 \u2192 +5\u00b0 \u2192 hold \u2192 return.  "
+    "Platform tilts accordingly; PX4 senses in real time.",
     20,
 )
 
@@ -778,7 +776,7 @@ _bullet(tf8, "포화 플래그 및 스케일링 계수 α", None, 20, Pt(8))
 
 _p(tf8, "", 8, sp=Pt(16))
 _p(tf8, "KEY POINT", 22, BLUE, True, Pt(8))
-_bullet(tf8, "Serial RTT ~22 ms + Servo PWM 50 Hz(20 ms) → 루프 ~50 Hz", None, 20, Pt(8))
+_bullet(tf8, "저비용 50 Hz RC 서보 | Serial RTT ~22 ms", None, 20, Pt(8))
 _bullet(tf8, "이 블록 이후부터 PX4가 경험하는 것은 실제 관성 운동", None, 20, Pt(8))
 
 
@@ -981,25 +979,24 @@ _img(sl, fig5b, Inches(10.0), Inches(3.4), width=Inches(8.5))
 # p.font.italic = True
 # p.alignment = PP_ALIGN.CENTER
 
-chip_top = Inches(7.5)
-chip_h = Inches(0.6)
-chip_w = Inches(4.2)
+chip_h = Inches(0.5)
+chip_w = Inches(8.5)
 chips = [
-    ("X-Plane age mean/median: 27.2 / 30.5 ms", Inches(1.2)),
-    ("PX4 age mean/median: 18.9 / 14.8 ms", Inches(5.7)),
-    ("Serial RTT mean/median: 21.7 / 17.1 ms", Inches(10.2)),
-    ("End-to-end mean/median: 48.9 / 48.2 ms", Inches(14.7)),
+    ("X-Plane age: mean 27.2 / median 30.5 ms",  Inches(1.0),  Inches(7.35)),
+    ("PX4 age: mean 18.9 / median 14.8 ms",      Inches(10.0), Inches(7.35)),
+    ("Serial RTT: mean 21.7 / median 17.1 ms",    Inches(1.0),  Inches(7.85)),
+    ("End-to-end: mean 48.9 / median 48.2 ms",    Inches(10.0), Inches(7.85)),
 ]
-for text, x in chips:
-    ctb = _tb(sl, x, chip_top, chip_w, chip_h)
+for text, x, y in chips:
+    ctb = _tb(sl, x, y, chip_w, chip_h)
     p = ctb.text_frame.paragraphs[0]
     p.text = text
-    p.font.size = Pt(20)
+    p.font.size = Pt(18)
     p.font.color.rgb = BLUE
     p.font.bold = True
     p.alignment = PP_ALIGN.CENTER
 
-ctf = _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),"측정된 지연과 지터가 위상 지연을 설명하며, 이 플랫폼의 실질적 대역폭을 정의한다.", 20)
+ctf = _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),"종단간 ~48 ms — 분포 폭이 크므로 유효 bandwidth는 전용 sine-sweep으로 정량화 예정", 20)
 
 _sn(sl, 13)
 
@@ -1036,6 +1033,10 @@ takeaways = [
 for i, (en, kr) in enumerate(takeaways):
     _p(ltf, f"{i + 1}.  {en}", 20, DARK, sp=Pt(14))
 
+_p(ltf, "", 8, sp=Pt(16))
+_p(ltf, "※  SW HILS·비행 시험의 대체가 아닌 보완적 검증 수단",
+   18, RED, True, Pt(4))
+
 div = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(9.85), Inches(3.5), Pt(2), Inches(5.0))
 div.fill.solid()
 div.fill.fore_color.rgb = BLUE
@@ -1062,7 +1063,7 @@ for en, kr in [
     _p(rtf, f"\u2192  {en}", 20, DARK, sp=Pt(14))
 
 _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
-         "플랫폼 성능을 정량적으로 특성화하여, SW HILS와 실비행 시험 사이를 잇는 검증 수단 구축", 20)
+         "SW HILS와 비행 시험 사이의 보완적 검증 수단 — 작업 영역·공력 하중 한계 인지 하에 물리적 관성 자극 제공", 20)
 
 _sn(sl, 14)
 
@@ -1127,67 +1128,7 @@ _p(atf, "worst-direction limit ~10\u00b0;\nless margin than z=+20 mm.", 20, GREY
 _sn(sl, 16)
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SLIDE 17 — Backup: Anticipated Questions
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-sl = make_slide(prs, blank)
-slide_title(sl, "Q&A")
-
-questions = [
-    ("Why not conventional HILS?",
-     "Real inertial excitation that sensor\nsynthesis cannot provide. \u2192 Sl 3"),
-    ("How do you handle saturation?",
-     "Baseline mostly within available\nrange at z=+20 mm; sat 0-1%.\nStress tests planned. \u2192 Sl 10+13+14"),
-    ("Effective bandwidth?",
-     "Placeholder: BW ~X.X Hz, phase\n~Y\u00b0 @ 1 Hz from sine sweep.\nCurrent data: E2E ~51 ms. \u2192 Sl 13"),
-    ("Open-loop platform \u2014 pose accuracy?",
-     "Hobby servos, no encoder. Inclinometer:\n~0.1\u00b0 roll, ~0.5\u00b0 pitch. \u2192 Sl 3"),
-    ("What is mounting bias?",
-     "~1.8\u00b0 from FC alignment. Stable\n(\u03c3 \u2248 0.2\u00b0), calibrated out. \u2192 Sl 12"),
-    ("How repeatable across runs?",
-     "5 runs: \u03c3 \u2248 0.2\u00b0 intra, \u0394 \u2264 0.8\u00b0 inter.\n\u2192 Sl 12+14"),
-    ("What about yaw?",
-     "In the loop, but trim scenario\nexcites pitch primarily. \u2192 Sl 10"),
-    ("Extend to quadrotors?",
-     "Architecture extensible in principle.\nModel + PID change. Future work. \u2192 Sl 14"),
-]
-
-cols = 4
-rows = 2
-cw = Inches(4.2)
-ch = Inches(2.6)
-cgap_x = Inches(0.3)
-cgap_y = Inches(0.3)
-total_w = cols * cw + (cols - 1) * cgap_x
-grid_left = (prs.slide_width - total_w) // 2
-grid_top = Inches(3.3)
-
-for i, (q, a) in enumerate(questions):
-    col = i % cols
-    row = i // cols
-    x = grid_left + col * (cw + cgap_x)
-    y = grid_top + row * (ch + cgap_y)
-
-    _card(sl, x, y, cw, ch)
-
-    qtb = _tb(sl, x + Inches(0.25), y + Inches(0.2), cw - Inches(0.5), Inches(0.6))
-    p = qtb.text_frame.paragraphs[0]
-    p.text = q
-    p.font.size = Pt(20)
-    p.font.color.rgb = BLUE
-    p.font.bold = True
-
-    atb = _tb(sl, x + Inches(0.25), y + Inches(0.85), cw - Inches(0.5), ch - Inches(1.1))
-    atf = atb.text_frame
-    atf.word_wrap = True
-    p = atf.paragraphs[0]
-    p.text = a
-    p.font.size = Pt(20)
-    p.font.color.rgb = DARK
-    p.line_spacing = Pt(20)
-
-_sn(sl, 17)
+## Slide 17 (Q&A cards) removed — no dedicated visuals; answers are in the script.
 
 
 # ── Save ────────────────────────────────────────────────────────────
