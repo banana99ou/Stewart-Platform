@@ -1,6 +1,7 @@
 """Generate KSAS Spring 2026 conference PowerPoint from the blue Canva template."""
 
 import os
+import re
 import subprocess
 import tempfile
 from pptx import Presentation
@@ -12,6 +13,7 @@ from pptx.enum.shapes import MSO_SHAPE
 BASE = os.path.dirname(os.path.abspath(__file__))
 FIG = os.path.join(BASE, "fig")
 TEMPLATE = os.path.join(BASE, "template.pptx")
+SCRIPT_MD = os.path.join(BASE, "Conference_presentation_script.md")
 
 # Use a Korean-capable bold font for all generated text.
 FONT_NAME = "NanumSquare Bold"
@@ -258,6 +260,86 @@ def _emu_to_in(v):
     return v / 914400.0
 
 
+def _clean_note_line(line):
+    line = line.replace("`", "")
+    if line.startswith("**") and line.endswith("**") and len(line) >= 4:
+        line = line[2:-2]
+    return line.rstrip()
+
+
+def _load_korean_notes(script_path):
+    """Parse per-slide Korean speaker notes from the conference script markdown."""
+    notes = {}
+    current_slide = None
+    buffer = []
+    in_korean_section = False
+    slide_heading_re = re.compile(r"^##\s+슬라이드\s+(\d+)\s+[—-]\s+.+$")
+
+    def flush():
+        nonlocal buffer, current_slide
+        if current_slide is None:
+            buffer = []
+            return
+        text = "\n".join(buffer).strip()
+        if text:
+            notes[current_slide] = text
+        buffer = []
+
+    with open(script_path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.rstrip("\n")
+            stripped = line.strip()
+
+            if stripped == "# 발표 대본 (Korean Spoken Script)":
+                in_korean_section = True
+                continue
+            if stripped == "# English Reference Script":
+                flush()
+                break
+            if not in_korean_section or stripped == "---":
+                continue
+
+            slide_match = slide_heading_re.match(stripped)
+            if slide_match:
+                flush()
+                current_slide = int(slide_match.group(1))
+                continue
+            if stripped == "## Q&A 답변":
+                flush()
+                current_slide = 16
+                buffer.append("Q&A 준비 답변")
+                continue
+            if stripped.startswith("## "):
+                flush()
+                current_slide = None
+                continue
+
+            if current_slide is not None:
+                buffer.append(_clean_note_line(line))
+
+    flush()
+    return notes
+
+
+def _add_notes(sl, slide_num):
+    text = SPEAKER_NOTES.get(slide_num)
+    if not text:
+        return
+
+    tf = sl.notes_slide.notes_text_frame
+    tf.clear()
+    tf.word_wrap = True
+
+    for idx, line in enumerate(text.splitlines()):
+        p = tf.paragraphs[0] if idx == 0 else tf.add_paragraph()
+        p.text = line
+        p.level = 0
+        p.font.name = FONT_NAME
+        p.font.size = Pt(14)
+        p.font.bold = False
+        p.font.color.rgb = BLACK
+
+
 def _sn(sl, n):
     tb = _tb(sl, Inches(18.2), Inches(10.55), Inches(1.2), Inches(0.5))
     p = tb.text_frame.paragraphs[0]
@@ -279,6 +361,11 @@ def _circle(sl, l, t, d, fill, text, text_color=WHITE, text_sz=20):
     c.text_frame.margin_left = Pt(0)
     c.text_frame.margin_right = Pt(0)
     return c
+
+
+def _finalize_slide(sl, slide_num):
+    _sn(sl, slide_num)
+    _add_notes(sl, slide_num)
 
 
 def make_slide(prs, layout):
@@ -385,7 +472,7 @@ def _block_slide_base(prs, layout, slide_num, title, step_num):
     ctf = ctb.text_frame
     ctf.word_wrap = True
 
-    _sn(sl, slide_num)
+    _finalize_slide(sl, slide_num)
     return sl, ctf
 
 
@@ -398,6 +485,7 @@ while len(prs.slides._sldIdLst) > 0:
     del prs.slides._sldIdLst[0]
 
 blank = prs.slide_layouts[6]
+SPEAKER_NOTES = _load_korean_notes(SCRIPT_MD)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -439,7 +527,7 @@ p.font.bold = True
 p.alignment = PP_ALIGN.CENTER
 _p(tf, "\uc815\ud604\uc6a9 \u2014 \uad6d\ubbfc\ub300\ud559\uad50 \ubbf8\ub798\ubaa8\ube4c\ub9ac\ud2f0\uc81c\uc5b4\uc5f0\uad6c\uc2e4", 20, GREY, sp=Pt(6), align=PP_ALIGN.CENTER)
 
-_sn(sl, 1)
+_finalize_slide(sl, 1)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -499,7 +587,7 @@ div.line.fill.background()
 # bottom callout
 _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),"물리 폐루프 시험 환경이 안정적으로 동작하고 추종 성능을 정량화할 수 있음을 실험 데이터로 입증", 20)
 
-_sn(sl, 2)
+_finalize_slide(sl, 2)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -576,7 +664,7 @@ ctf = _callout(
 _p(ctf, "소프트웨어 자세 명령을 실제 6-DOF 모션으로 변환해 PX4 IMU가 실제 운동을 경험",
    20, GREY, sp=Pt(6), align=PP_ALIGN.CENTER)
 
-_sn(sl, 3)
+_finalize_slide(sl, 3)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -658,7 +746,7 @@ _callout(
     20,
 )
 
-_sn(sl, 4)
+_finalize_slide(sl, 4)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -707,7 +795,7 @@ p.font.color.rgb = BLUE
 p.font.bold = True
 p.alignment = PP_ALIGN.CENTER
 
-_sn(sl, 5)
+_finalize_slide(sl, 5)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -869,7 +957,7 @@ for en in [
 _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
          "시스템 자체 특성(지연·바이어스·장착 효과) 분리를 위해 clean baseline부터 수행", 20)
 
-_sn(sl, 10)
+_finalize_slide(sl, 10)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -922,7 +1010,7 @@ _ko(atf, "", 20, Pt(8))
 _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
          "플랫폼은 정량적 폐루프 검증이 가능할 정도로, 명령된 자세 전이를 충분히 정확하게 재현한다.", 20)
 
-_sn(sl, 11)
+_finalize_slide(sl, 11)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -956,7 +1044,7 @@ p.alignment = PP_ALIGN.CENTER
 
 _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2), "지배적인 잔여 오차는 무작위 불안정이 아니며, 고정 바이어스는 동적 추종 충실도와 분리해 해석해야 한다.", 20)
 
-_sn(sl, 12)
+_finalize_slide(sl, 12)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -998,7 +1086,7 @@ for text, x, y in chips:
 
 ctf = _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),"종단간 ~48 ms — 분포 폭이 크므로 유효 bandwidth는 전용 sine-sweep으로 정량화 예정", 20)
 
-_sn(sl, 13)
+_finalize_slide(sl, 13)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1065,7 +1153,7 @@ for en, kr in [
 _callout(sl, Inches(2.67), Inches(8.8), Inches(14.66), Inches(1.2),
          "SW HILS와 비행 시험 사이의 보완적 검증 수단 — 작업 영역·공력 하중 한계 인지 하에 물리적 관성 자극 제공", 20)
 
-_sn(sl, 14)
+_finalize_slide(sl, 14)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1097,7 +1185,7 @@ p.font.color.rgb = BLUE
 p.font.bold = True
 p.alignment = PP_ALIGN.CENTER
 
-_sn(sl, 15)
+_finalize_slide(sl, 15)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1125,7 +1213,7 @@ _p(atf, "z = 0 mm", 28, RED, True, Pt(8))
 _p(atf, "\u2192 smaller available range", 22, DARK, sp=Pt(8))
 _p(atf, "worst-direction limit ~10\u00b0;\nless margin than z=+20 mm.", 20, GREY, sp=Pt(16))
 
-_sn(sl, 16)
+_finalize_slide(sl, 16)
 
 
 ## Slide 17 (Q&A cards) removed — no dedicated visuals; answers are in the script.
