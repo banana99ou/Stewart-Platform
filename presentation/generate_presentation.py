@@ -919,7 +919,7 @@ _bullet(ltf, "항상 동일 Honolulu (PHNL) 10nm Approach", "", 20, Pt(8))
 _p(ltf, "", 8, sp=Inches(0.09))
 _bullet(ltf, "Stewart 플랫폼의 포화 플래그(SAT) 감시;", "", 20, Pt(8))
 _p(ltf, "", 8, sp=Inches(0.09))
-_bullet(ltf, "조건별 9회 반복 실행으로 통계적 유의미성 확보", "", 20, Pt(8))
+_bullet(ltf, "9회 반복 실행으로 통계적 유의미성 확보", "", 20, Pt(8))
 _p(ltf, "", 8, sp=Inches(0.09))
 _bullet(ltf, "z=+20 mm에서 중립자세 설정 (최대 회전)", "", 20, Pt(8))
 
