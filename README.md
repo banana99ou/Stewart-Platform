@@ -1,4 +1,4 @@
-# project_spec.md — Stewart Platform Physical HILS (KSAS Spring Conference)
+# Stewart Platform: Physical HILS Testbed (KSAS Spring Conference)
 
 ## 0) Publication Target
 This project is being developed for **presentation at the KSAS (Korean Society for Aeronautical & Space Sciences) Spring Conference (춘계 항공우주학회)**. The build and experiments are scoped to produce a conference-grade demo + quantitative results (tracking error, latency, limitations).
